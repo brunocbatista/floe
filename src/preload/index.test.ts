@@ -203,6 +203,13 @@ test('the pointer steers workspace calls; a pinned channel never leaves this win
   await api.config.get()
   assert.deepEqual(state.invokes.at(-1), ['config:get', []])
   assert.equal(opened[1].invokes.at(-1)!.channel, 'settings:getSystemPrompt')
+
+  // Browse… is the native folder picker, which can only open on the machine
+  // the window is on. Down the pointer it hit the daemon's stub dialog, which
+  // answers "cancelled" — a row that did nothing.
+  await api.projects.add('Projects')
+  assert.deepEqual(state.invokes.at(-1), ['projects:add', ['Projects']])
+  assert.equal(opened[1].invokes.at(-1)!.channel, 'settings:getSystemPrompt', 'the picker never left this window')
 })
 
 test('a media address from a machine comes back tagged with that machine', async () => {

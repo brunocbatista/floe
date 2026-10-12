@@ -1520,6 +1520,30 @@ export default function App() {
     if (res.created && res.path) setup.start(res.path)
   }
 
+  /**
+   * Where an add lands. On the machine the window is on, that is afterAdd. On
+   * any other, only the machine that holds a project lists it, so the add takes
+   * the window there and hands that instance the landing. `from` is where the
+   * window was when the dialog was answered, read then rather than when the add
+   * resolves: whether this is a move is the user's choice in the dialog, not
+   * wherever the pointer drifted meanwhile.
+   */
+  const landAdded = (
+    backend: string,
+    from: string,
+    res: { error?: string; path?: string; created?: boolean }
+  ): void => {
+    if (res.error) return say(res.error)
+    if (backend === from) return afterAdd(res)
+    if (res.path) handOff({ path: res.path, created: res.created }, self)
+    if (attach(backend)) return
+    // Refused — the machine went away between the add and now. The project is
+    // on it either way, so say so and drop the handoff rather than leave it for
+    // an unrelated switch to pick up.
+    dropLanding()
+    say(`Added on ${backendLabel(backend)}, which is no longer attached.`)
+  }
+
   // Pick up the landing left by whatever moved the window here — opening a
   // project on another machine, or adding one there. Claimed as it is applied,
   // so the instance the move brought up is the only one that lands it.
@@ -3830,35 +3854,25 @@ export default function App() {
               : (group) => {
                   setAdding(false)
                   restoreFocus()
-                  void projects.add(group).then(afterAdd)
+                  // The picker opens on this machine (projects:add is pinned),
+                  // so the project lands here — a move home when the window is
+                  // attached elsewhere, like a typed path on another machine.
+                  const from = window.floe.backends.current()
+                  void projects.add(group).then((res) => {
+                    // The picker was dismissed: nothing added, nowhere to go.
+                    if (!res.error && !res.path) return
+                    landAdded(LOCAL, from, res)
+                  })
                 }
           }
           onPair={pairHost}
           onAdd={(backend, path, group) => {
             setAdding(false)
             restoreFocus()
-            // Where the window was when the dialog was answered. Read now rather
-            // than when the add resolves: whether this is a move is the user's
-            // choice in the dialog, not wherever the pointer drifted meanwhile.
             const from = window.floe.backends.current()
             void projects
               .addByPath(path, group, backend)
-              .then((res) => {
-                if (res.error) return say(res.error)
-                // Only the machine that holds the project lists it, so an add
-                // somewhere else takes the window with it and hands that
-                // instance the landing.
-                if (backend !== from) {
-                  if (res.path) handOff({ path: res.path, created: res.created }, self)
-                  if (attach(backend)) return
-                  // Refused — the machine went away between the add and now. The
-                  // project is on it either way, so say so and drop the handoff
-                  // rather than leave it for an unrelated switch to pick up.
-                  dropLanding()
-                  return say(`Added on ${backendLabel(backend)}, which is no longer attached.`)
-                }
-                afterAdd(res)
-              })
+              .then((res) => landAdded(backend, from, res))
               // A remote add fails over a socket, not just in a handler: the
               // machine dropped, a bad token, a channel it doesn't know. The
               // dialog is already closed, so this is the only place left to say it.

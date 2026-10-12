@@ -12,6 +12,7 @@ import {
   dropLanding,
   handOff,
   isRemote,
+  LOCAL,
   loadProjectUnion,
   mergeProjects,
   removeOn,
@@ -201,7 +202,16 @@ export function useProjects(self: object): Projects {
   )
 
   const add = useCallback(
-    async (group?: string) => landOn(await window.floe.projects.add(group)),
+    async (group?: string) => {
+      const res = await window.floe.projects.add(group)
+      // The picker is this machine's (projects:add is pinned), so the project
+      // lands here whatever the pointer says — and, as with addByPath, one
+      // added on a machine the window is not on is the caller's move to make.
+      if (currentBackend() !== LOCAL) {
+        return { error: res.error, path: res.project?.path, created: res.created }
+      }
+      return landOn(res)
+    },
     [landOn]
   )
 

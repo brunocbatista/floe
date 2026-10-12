@@ -94,6 +94,10 @@ export const PINNED_CHANNELS = new Set([
   // The hosts Add project lists are this window's config, like the rest of it.
   'projects:hosts',
   'projects:addHost',
+  // Browse… is the native folder picker, and a picker can only open on the
+  // machine the window is on. Sent down the pointer it reached the daemon's
+  // stub dialog, which answers "cancelled" — a Browse row that did nothing.
+  'projects:add',
   'config:get',
   'config:set',
   'config:errors',

@@ -351,7 +351,7 @@ export function buildFloeApi(ipcRenderer: IpcLike, host: FloeHost) {
         ipcRenderer.invoke('projects:rename', path, newName),
       // `created` is false for a re-add: main answers with the project it
       // already had, and only a project Floe has never seen starts the setup
-      // flow. See addProjectByPath.
+      // flow. See addProjectByPath. Pinned: the picker opens on this machine.
       add: (group?: string): Promise<{ project?: Project; created?: boolean; error?: string }> =>
         ipcRenderer.invoke('projects:add', group),
       // Web/headless has no native folder picker — add by an explicit server-side path.
