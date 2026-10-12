@@ -199,11 +199,13 @@ test('the vim set moves the cursor: g, ⌃D/⌃U, / and n', () => {
   for (const key of ['g', '/', 'n']) assert.equal(r({ key }, { typing: true }), null)
 })
 
-// No default binds a bare shift+letter. Shift is how you type a capital, so a
-// binding on one is a letter the composer can never receive — ⇧G and ⇧N were
-// both dropped for exactly that. The commands stay, reachable from the palette.
+// No global default binds a bare shift+letter. Shift is how you type a capital,
+// so a binding on one is a letter the composer can never receive — ⇧G and ⇧N
+// were both dropped for exactly that. A bind scoped to one panel is allowed: it
+// only fires with that panel focused and nobody typing (⇧D in the reader).
 test('no default is a bare shift+letter', () => {
   for (const bind of DEFAULT_KEYMAP) {
+    if (/\bpanel\b/.test(bind.when ?? '')) continue
     const first = normalizeChord(bind.key).split(' ')[0]
     const mods = first.split('+').slice(0, -1)
     // `?` is shift+/ on the keyboard, not a capital, so only letters count.
@@ -254,4 +256,10 @@ test('the setup checklist answers ⏎, r and escape, and only in its own panel',
 test('? opens the keys help, and types a ? in the composer', () => {
   assert.deepEqual(resolveKey({ key: '?', shift: true }), { id: 'help.keys' })
   assert.equal(resolveKey({ key: '?', shift: true }, { typing: true }), null)
+})
+
+test('⇧D downloads in the reader, and types a D anywhere else', () => {
+  assert.deepEqual(resolveKey({ key: 'D', shift: true }, { kind: 'file' }), { id: 'file.download' })
+  assert.equal(resolveKey({ key: 'D', shift: true }, { kind: 'file', typing: true }), null)
+  assert.equal(resolveKey({ key: 'D', shift: true }, { kind: 'chat' }), null)
 })

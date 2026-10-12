@@ -27,6 +27,20 @@ import { PINNED_CHANNELS } from '../shared/remoteProtocol.ts'
 import { secureBackendUrl } from './backendUrl.ts'
 import { rewriteProbe, rewriteTranscript } from './mediaRewrite.ts'
 
+/** Bytes the renderer read across, handed to the browser as a download. */
+function browserDownload(name: string, base64: string): null {
+  const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
+  const url = URL.createObjectURL(new Blob([bytes]))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = name
+  link.click()
+  // Revoked on the next tick, not now: Chromium reads the blob after the
+  // click returns, and a url pulled out from under it downloads nothing.
+  setTimeout(() => URL.revokeObjectURL(url), 0)
+  return null
+}
+
 /** Written into the page by the server plugin's HTTP face, before this module loads. */
 export interface FloeBoot {
   token: string
@@ -123,18 +137,9 @@ export function browserHandlers(
     // bytes across (renderer/src/download.ts), so this is where they become a
     // download — the tab's only way to put a file on the user's computer.
     // Answers null: where it landed is the browser's business, not ours.
-    'files:openDownload': async (name: string, base64: string) => {
-      const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
-      const url = URL.createObjectURL(new Blob([bytes]))
-      const link = document.createElement('a')
-      link.href = url
-      link.download = name
-      link.click()
-      // Revoked on the next tick, not now: Chromium reads the blob after the
-      // click returns, and a url pulled out from under it downloads nothing.
-      setTimeout(() => URL.revokeObjectURL(url), 0)
-      return null
-    }
+    'files:openDownload': async (name: string, base64: string) => browserDownload(name, base64),
+    // A tab cannot open a download anyway, so saving one is the same click.
+    'files:saveDownload': async (name: string, base64: string) => browserDownload(name, base64)
     // `backends:get` is NOT here: it is the serving daemon's own machine list,
     // and the router below asks it over the socket like the preload asks main.
   }

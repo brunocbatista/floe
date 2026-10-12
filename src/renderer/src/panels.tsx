@@ -7,6 +7,7 @@ import {
   IconChevronDown,
   IconChevronRight,
   IconCopy,
+  IconDownload,
   IconPlayerPlay,
   IconFile,
   IconFolder,
@@ -538,7 +539,10 @@ export const KINDS = {
     needsProject: true,
     // The drawn/source switch, for the files that have two ways to be read: a
     // page and a markdown document. The command decides when it applies.
-    action: { icon: IconFileTypeHtml, title: 'Page or source (s)', command: 'file.source' }
+    action: [
+      { icon: IconFileTypeHtml, title: 'Page or source (s)', command: 'file.source' },
+      { icon: IconDownload, title: 'Download (D)', command: 'file.download' }
+    ]
   },
   // The same file, in your editor. Shares the diff's slot for the same reason
   // the reader does — pressing `e` turns the file window INTO the editor rather

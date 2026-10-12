@@ -78,3 +78,14 @@ export async function downloadAndOpen(
   )
   return window.floe.files.openDownload(name, base64)
 }
+
+/**
+ * `D` in the reader: pull the file here and leave the copy in Downloads.
+ * Answers the saved path, or null in a tab, where the browser chose it.
+ */
+export async function downloadFile(worktreePath: string, relPath: string): Promise<string | null> {
+  const { name, base64 } = await pullFile((start, length) =>
+    window.floe.files.readChunk(worktreePath, relPath, start, length)
+  )
+  return window.floe.files.saveDownload(name, base64)
+}

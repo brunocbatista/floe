@@ -52,6 +52,7 @@ export const IconChecklist = make('IconChecklist', [{"d":"M19 4h2v2h-2V4zm-2 4V6
 export const IconChevronDown = make('IconChevronDown', [{"d":"M7 8H5v2h2v2h2v2h2v2h2v-2h2v-2h2v-2h2V8h-2v2h-2v2h-2v2h-2v-2H9v-2H7V8z"}])
 export const IconChevronRight = make('IconChevronRight', [{"d":"M8 5v2h2V5H8zm4 4V7h-2v2h2zm2 2V9h-2v2h2zm0 2h2v-2h-2v2zm-2 2v-2h2v2h-2zm0 0h-2v2h2v-2zm-4 4v-2h2v2H8z"}])
 export const IconCopy = make('IconCopy', [{"d":"M4 2h11v2H6v13H4V2zm4 4h12v16H8V6zm2 2v12h8V8h-8z"}])
+export const IconDownload = make('IconDownload', [{"d":"M13 17V3h-2v10H9v-2H7v2h2v2h2v2h2zm8 2v-4h-2v4H5v-4H3v6h18v-2zm-8-6v2h2v-2h2v-2h-2v2h-2z"}])
 export const IconDatabase = make('IconDatabase', [{"d":"M3 3h18v18H3V3zm2 2v6h14V5H5zm14 8H5v6h14v-6zM7 7h2v2H7V7zm2 8H7v2h2v-2z"}])
 export const IconExternalLink = make('IconExternalLink', [{"d":"M21 11V3h-8v2h4v2h-2v2h-2v2h-2v2H9v2h2v-2h2v-2h2V9h2V7h2v4h2zM11 5H3v16h16v-8h-2v6H5V7h6V5z"}])
 export const IconFile = make('IconFile', [{"d":"M3 22h18V8h-2V6h-2v2h-2V6h2V4h-2V2H3v20zm2-2V4h8v6h6v10H5z"}])

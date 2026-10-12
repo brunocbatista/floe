@@ -965,6 +965,9 @@ export function buildFloeApi(ipcRenderer: IpcLike, host: FloeHost) {
        */
       openDownload: (name: string, base64: string): Promise<string | null> =>
         ipcRenderer.invoke('files:openDownload', name, base64),
+      /** The same landing without the open — `D` in the reader. */
+      saveDownload: (name: string, base64: string): Promise<string | null> =>
+        ipcRenderer.invoke('files:saveDownload', name, base64),
       /**
        * Fires when anything in the worktree lands on disk — including the
        * gitignored files (`.floe/plans/…`) the review event skips, because the

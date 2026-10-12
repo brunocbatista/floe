@@ -583,6 +583,13 @@ Every other file already IS its source, and the key does nothing there.`,
     binds: [{ key: 's', command: 'file.source', when: 'panel == "file"' }]
   },
   {
+    title: 'Download a File',
+    doc: `\`D\` copies the open file into Downloads on the machine the window is on,
+pulling it across when the worktree lives somewhere else. In a browser tab it
+is an ordinary download.`,
+    binds: [{ key: 'shift+d', command: 'file.download', when: 'panel == "file"' }]
+  },
+  {
     title: 'Reading a Diff',
     doc: `\`]\` and \`[\` walk the changes, a run of changed lines counting as one —
 a rewritten paragraph is one edit, not twelve.

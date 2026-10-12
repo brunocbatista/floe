@@ -1144,6 +1144,8 @@ export function registerFileIpc(): void {
     if (failure) throw new Error(failure)
     return path
   })
+  // `D` in the reader: the same copy into ~/Downloads, left there unopened.
+  handle('files:saveDownload', (_event, name: string, base64: string) => saveDownload(name, base64))
   handle('review:changedFiles', (_event, worktreePath: string) => changedFiles(worktreePath))
   handle('review:submodules', (_event, worktreePath: string) => submodules(worktreePath))
   handle('review:lastCommit', (_event, worktreePath: string) => lastCommit(worktreePath))

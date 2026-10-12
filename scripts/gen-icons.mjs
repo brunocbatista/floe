@@ -25,6 +25,7 @@ const MAP = {
   ChevronDown: 'chevron-down',
   ChevronRight: 'chevron-right',
   Copy: 'copy',
+  Download: 'download',
   Database: 'server',
   ExternalLink: 'external-link',
   File: 'file',

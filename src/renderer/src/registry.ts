@@ -38,7 +38,7 @@ import { reason } from './ipcError.ts'
 import { TASKS_TOGGLE_DONE } from './taskEvents.ts'
 import { taskChatOpener, type TaskFolderKind } from '../../shared/taskFolders.ts'
 import { colonyTab, setColonyTab, stepTab, type ColonyTab } from './colonyTab.ts'
-import { downloadAndOpen } from './download.ts'
+import { downloadAndOpen, downloadFile } from './download.ts'
 import { identifiersOf } from './definition.ts'
 import { CHAT_LAYOUTS, TRANSPARENCY, type FileOp } from '../../shared/types.ts'
 
@@ -1296,6 +1296,24 @@ export const REGISTRY: Map<string, Command> = new Map(
           // Finder can only show what is on this machine.
           if (!window.floe.backends.onThisMachine()) return c.say('the file is on another machine')
           void window.floe.files.reveal(root, path).catch((err: unknown) => c.say(reason(err)))
+        }
+      },
+      {
+        // The open file, copied into Downloads on the machine the window is on.
+        id: 'file.download',
+        title: 'Download the file',
+        group: 'Files',
+        enabled: (c) => !!c.worktree && c.lane.panels[c.lane.focus]?.kind === 'file',
+        unavailable: () => 'open a file first',
+        run: (c) => {
+          const path = c.lane.panels[c.lane.focus]?.sub
+          const root = c.worktree?.path
+          if (!path || !root) return
+          const name = path.split('/').pop()
+          c.say(`downloading ${name}…`)
+          void downloadFile(root, path)
+            .then((saved) => c.say(saved ? `saved ${saved}` : `downloaded ${name}`))
+            .catch((err: unknown) => c.say(reason(err)))
         }
       },
       {

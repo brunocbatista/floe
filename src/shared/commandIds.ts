@@ -50,6 +50,7 @@ export const COMMAND_IDS: string[] = [
   'editor.open',
   'file.open',
   'file.reveal',
+  'file.download',
   'file.source',
   'files.collapse',
   'changes.view',

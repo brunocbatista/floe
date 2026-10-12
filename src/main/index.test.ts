@@ -317,6 +317,7 @@ const CHANNELS = [
   'files:reveal',
   'files:readChunk',
   'files:openDownload',
+  'files:saveDownload',
   'review:changedFiles',
   'review:submodules',
   'review:lastCommit',
