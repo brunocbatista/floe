@@ -42,6 +42,10 @@ interface TurnCtx {
   effort?: string
   /** Last agentMessage of the turn — mirrors the exec path's "reply". */
   reply: string
+  /** agentMessage items whose text already reached the panel as deltas. */
+  streamed: Set<string>
+  /** Text is on screen since the last tool row: a new message needs a break. */
+  spoke: boolean
   timer: NodeJS.Timeout | null
 }
 
@@ -186,14 +190,61 @@ function handleMessage(msg: Record<string, unknown>): void {
   const ctx = typeof params.threadId === 'string' ? turnsByThread.get(params.threadId) : undefined
   if (!ctx) return
 
-  if (msg.method === 'item/completed') {
-    const item = params.item as { type?: string; text?: string } | undefined
-    // Same contract as the exec path: the turn's reply is its last agent
-    // message. Deltas are skipped — one settled text per turn.
-    if (item?.type === 'agentMessage' && typeof item.text === 'string') ctx.reply = item.text
-    return
+  // Any word from the thread means the turn is alive: the timeout measures
+  // silence, not length, or a long build dies at four minutes mid-command.
+  armTimer(ctx)
+
+  const handler = NOTIFICATIONS[String(msg.method)]
+  if (handler) handler(ctx, params)
+}
+
+/** Say a slice of text, breaking from a message no tool separated it from. */
+function say(ctx: TurnCtx, text: string): void {
+  if (ctx.spoke) sendAgentEvent(ctx.win, ctx.key, { kind: 'text', text: '\n\n' })
+  ctx.spoke = true
+  sendAgentEvent(ctx.win, ctx.key, { kind: 'text', text })
+}
+
+type Notify = (ctx: TurnCtx, params: Record<string, unknown>) => void
+
+function onReasoningDelta(ctx: TurnCtx, params: Record<string, unknown>): void {
+  if (typeof params.delta === 'string' && params.delta) {
+    sendAgentEvent(ctx.win, ctx.key, { kind: 'reasoning', text: params.delta })
   }
-  if (msg.method === 'thread/tokenUsage/updated') {
+}
+
+const NOTIFICATIONS: Record<string, Notify> = {
+  'item/agentMessage/delta': (ctx, params) => {
+    if (typeof params.delta !== 'string' || !params.delta) return
+    const itemId = String(params.itemId ?? '')
+    if (ctx.streamed.has(itemId)) {
+      sendAgentEvent(ctx.win, ctx.key, { kind: 'text', text: params.delta })
+      return
+    }
+    ctx.streamed.add(itemId)
+    say(ctx, params.delta)
+  },
+  'item/reasoning/summaryTextDelta': onReasoningDelta,
+  'item/reasoning/textDelta': onReasoningDelta,
+  'item/started': (ctx, params) => {
+    const tool = codexTool(params.item as Record<string, unknown> | undefined)
+    if (!tool) return
+    ctx.spoke = false
+    sendAgentEvent(ctx.win, ctx.key, { kind: 'tool', ...tool })
+    logTurn(ctx.key, { role: 'tool', ...tool })
+  },
+  'item/completed': (ctx, params) => {
+    const item = params.item as { type?: string; id?: string; text?: string } | undefined
+    if (item?.type !== 'agentMessage' || typeof item.text !== 'string') return
+    // Same contract as the exec path: the turn's reply is its last agent
+    // message. Each message is also said as it lands — the ones between tool
+    // calls are codex narrating its work, which is the feedback a panel needs.
+    ctx.reply = item.text
+    // An older codex that sends no deltas: say the whole message now.
+    if (!ctx.streamed.has(String(item.id ?? ''))) say(ctx, item.text)
+    logTurn(ctx.key, { role: 'assistant', text: item.text, model: ctx.model, effort: ctx.effort, provider: 'codex' })
+  },
+  'thread/tokenUsage/updated': (ctx, params) => {
     const last = (params.tokenUsage as { last?: { inputTokens?: number; outputTokens?: number } })?.last
     const n = (v: unknown): number => (typeof v === 'number' ? v : 0)
     const tokens = n(last?.inputTokens) + n(last?.outputTokens)
@@ -201,9 +252,8 @@ function handleMessage(msg: Record<string, unknown>): void {
     // `total` is the thread's running spend — what the colony's step report reads.
     const running = codexRunningUsage(params.tokenUsage)
     if (running) addCumulative(ctx.key, `codex:${params.threadId}`, running)
-    return
-  }
-  if (msg.method === 'turn/completed') {
+  },
+  'turn/completed': (ctx, params) => {
     const turn = params.turn as { status?: string; error?: { message?: string } | null } | undefined
     finishTurn(ctx, turn?.error?.message ?? undefined)
   }
@@ -299,7 +349,37 @@ export function answerCodexQuestion(key: string, answered: string[][]): boolean 
   return true
 }
 
+/**
+ * A codex work item as the same `tool` row Claude's tool_use draws: commands
+ * as Bash, patches as Edit, MCP calls under Claude's `mcp__server__tool`
+ * spelling — so one transcript reads the same whichever harness answered.
+ */
+export function codexTool(item: Record<string, unknown> | undefined): { name: string; summary?: string } | null {
+  const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined)
+  switch (item?.type) {
+    case 'commandExecution':
+      return { name: 'Bash', summary: str(item.command) }
+    case 'fileChange': {
+      const changes = Array.isArray(item.changes) ? (item.changes as Array<{ path?: unknown }>) : []
+      const paths = changes.map((c) => str(c.path)).filter(Boolean)
+      return { name: 'Edit', summary: paths.length ? paths.join(', ') : undefined }
+    }
+    case 'mcpToolCall':
+      return { name: `mcp__${String(item.server ?? '')}__${String(item.tool ?? '')}` }
+    case 'dynamicToolCall':
+      return { name: String(item.tool ?? 'tool') }
+    case 'webSearch':
+      return { name: 'WebSearch', summary: str(item.query) }
+    case 'imageView':
+      return { name: 'Read', summary: str(item.path) }
+    default:
+      return null
+  }
+}
+
 function armTimer(ctx: TurnCtx): void {
+  // Parked on a question: the user is the one thinking, not codex.
+  if (questionBySession.has(ctx.key)) return
   if (ctx.timer) clearTimeout(ctx.timer)
   ctx.timer = setTimeout(() => finishTurn(ctx, ctx.reply ? undefined : 'Codex timed out.'), TURN_TIMEOUT_MS)
 }
@@ -310,10 +390,7 @@ function finishTurn(ctx: TurnCtx, error?: string): void {
   turnsByThread.delete(ctx.threadId)
   questionBySession.delete(ctx.key)
   if (ctx.timer) clearTimeout(ctx.timer)
-  if (ctx.reply) {
-    sendAgentEvent(ctx.win, ctx.key, { kind: 'text', text: ctx.reply })
-    logTurn(ctx.key, { role: 'assistant', text: ctx.reply, model: ctx.model, effort: ctx.effort, provider: 'codex' })
-  }
+  // The reply was already said, message by message, as it landed.
   if (error) sendAgentEvent(ctx.win, ctx.key, { kind: 'error', message: error })
   sendAgentEvent(ctx.win, ctx.key, { kind: 'done', ok: !error })
 }
@@ -425,7 +502,7 @@ export async function chatWithCodexServer(
       }
     }
 
-    const ctx: TurnCtx = { win, key, threadId, model, effort, reply: '', timer: null }
+    const ctx: TurnCtx = { win, key, threadId, model, effort, reply: '', streamed: new Set(), spoke: false, timer: null }
     turnsByThread.set(threadId, ctx)
     armTimer(ctx)
     await request('turn/start', {

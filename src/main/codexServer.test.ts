@@ -222,22 +222,29 @@ test('a full turn: spawn, start the thread, run it, settle the reply', async () 
   push({ method: 'thread/tokenUsage/updated', params: { threadId: 'th-1', tokenUsage: {} } })
   push({ method: 'turn/completed', params: { threadId: 'th-1', turn: { status: 'completed', error: null } } })
 
-  assert.deepEqual(kinds(events), ['tokens', 'text', 'done'])
-  assert.equal((events[0] as { tokens: number }).tokens, 1000)
-  // The turn's reply is its LAST agentMessage, same contract as `codex exec`.
-  assert.equal((events[1] as { text: string }).text, 'three files')
-  assert.equal((events[2] as { ok: boolean }).ok, true)
+  // No deltas (an older codex): each message is said whole as it lands, with
+  // a break between two that no tool separates.
+  assert.deepEqual(kinds(events), ['text', 'text', 'text', 'tokens', 'done'])
+  assert.deepEqual(
+    events.slice(0, 3).map((e) => (e as { text: string }).text),
+    ['first draft', '\n\n', 'three files']
+  )
+  assert.equal((events[3] as { tokens: number }).tokens, 1000)
+  assert.equal((events[4] as { ok: boolean }).ok, true)
 
-  // The reply is persisted: codex writes no transcript Floe can resume by.
+  // Every message is persisted: codex writes no transcript Floe can resume by.
   assert.deepEqual(
     readRuntimeTranscript('k-happy').map((i) => ({ role: i.role, text: i.text })),
-    [{ role: 'assistant', text: 'three files' }]
+    [
+      { role: 'assistant', text: 'first draft' },
+      { role: 'assistant', text: 'three files' }
+    ]
   )
 
   // turn/completed dropped the routing, so a late notification is a no-op.
   push({ method: 'item/completed', params: { threadId: 'th-1', item: { type: 'agentMessage', text: 'late' } } })
   push({ method: 'turn/completed', params: { threadId: 'th-1', turn: {} } })
-  assert.equal(events.length, 3)
+  assert.equal(events.length, 5)
 })
 
 test('a known thread is resumed, and a mode change is pushed at it', async () => {
@@ -539,4 +546,50 @@ test('a spawn that throws outright fails the turn rather than raising', async ()
   } finally {
     globalThis.__floeSpawnCodexServer = real
   }
+})
+
+test('a turn streams: reasoning, narration, tool rows and the answer as they happen', async () => {
+  killServer()
+  resetReplies('th-live')
+  const { win, events } = fakeWin()
+  await chatWithCodexServer(win, 'k-live', '/work/tree', 'fix it', 'gpt-5.5', undefined, 'acceptEdits')
+
+  const t = 'th-live'
+  push({ method: 'item/reasoning/summaryTextDelta', params: { threadId: t, itemId: 'r1', delta: 'Looking' } })
+  push({ method: 'item/agentMessage/delta', params: { threadId: t, itemId: 'm1', delta: 'Checking ' } })
+  push({ method: 'item/agentMessage/delta', params: { threadId: t, itemId: 'm1', delta: 'tests.' } })
+  push({ method: 'item/completed', params: { threadId: t, item: { type: 'agentMessage', id: 'm1', text: 'Checking tests.' } } })
+  push({ method: 'item/started', params: { threadId: t, item: { type: 'commandExecution', id: 'c1', command: 'pnpm test' } } })
+  push({
+    method: 'item/started',
+    params: { threadId: t, item: { type: 'fileChange', id: 'f1', changes: [{ path: 'a.ts' }, { path: 'b.ts' }] } }
+  })
+  push({ method: 'item/started', params: { threadId: t, item: { type: 'mcpToolCall', id: 'x1', server: 'floe', tool: 'list_sessions' } } })
+  // Items that are not work (the user's own line, the reasoning item) draw no row.
+  push({ method: 'item/started', params: { threadId: t, item: { type: 'userMessage', id: 'u1' } } })
+  push({ method: 'item/agentMessage/delta', params: { threadId: t, itemId: 'm2', delta: 'Fixed.' } })
+  push({ method: 'item/completed', params: { threadId: t, item: { type: 'agentMessage', id: 'm2', text: 'Fixed.' } } })
+  push({ method: 'turn/completed', params: { threadId: t, turn: { status: 'completed', error: null } } })
+
+  assert.deepEqual(
+    events.map((e) =>
+      e.kind === 'tool' ? `tool ${e.name} ${e.summary ?? ''}`.trim() : 'text' in e ? `${e.kind} ${e.text}` : e.kind
+    ),
+    [
+      'reasoning Looking',
+      'text Checking ',
+      'text tests.',
+      'tool Bash pnpm test',
+      'tool Edit a.ts, b.ts',
+      'tool mcp__floe__list_sessions',
+      'text Fixed.',
+      'done'
+    ],
+    'streamed text is not said a second time when its item completes'
+  )
+  // A reload draws what the live panel drew.
+  assert.deepEqual(
+    readRuntimeTranscript('k-live').map((i) => `${i.role} ${i.text ?? i.name}`),
+    ['assistant Checking tests.', 'tool Bash', 'tool Edit', 'tool mcp__floe__list_sessions', 'assistant Fixed.']
+  )
 })

@@ -214,6 +214,8 @@ export function sendAgentEvent(win: BrowserWindow, key: string, event: AgentEven
   const answering = replays.get(key)?.choice?.provider
   if (answering && answering !== 'claude') {
     if (event.kind === 'text') runtimeText.set(key, (runtimeText.get(key) ?? '') + event.text)
+    // Codex narrates between tool calls; the answer is what it said after the last one.
+    if (event.kind === 'tool' && !event.query) runtimeText.delete(key)
     if (event.kind === 'done') {
       resolveWaiters(key, runtimeText.get(key) ?? '')
       runtimeText.delete(key)
