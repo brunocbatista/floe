@@ -1,0 +1,102 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Floe — composer shows when the model is not the default</title>
+<!-- The app's real stylesheet: .composer / .model rules are not re-declared here. -->
+<link rel="stylesheet" href="../src/renderer/src/index.css" /><style>
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--mono); font-size: 13px; }
+  .page { padding: 20px 24px; display: grid; gap: 28px; max-width: 760px; }
+  .lbl { margin: 0 0 4px; color: var(--text-strong); font-size: 12px; }
+  .why { margin: 0 0 10px; color: var(--dim); font-size: 11px; line-height: 1.5; }
+  .launch { padding: 18px; background: var(--panel); border: 1px solid var(--line); }
+
+  /* --- proposal styles (would move to index.css) --------------------------- */
+
+  /* O1: the chip itself says "not your default", in the harness's nick colour. */
+  .model[data-off] { border: 1px solid var(--off); padding: 1px 6px; }
+  .model[data-off] .model-harness { color: var(--off); }
+  .off-reset { margin-left: 6px; padding: 1px 6px; border: 1px solid var(--line); color: var(--dim); font: inherit; font-size: 11px; background: none; }
+  .off-reset kbd { color: var(--text); font: inherit; }
+
+  /* O2: a band on the card's top edge, naming both sides. */
+  .off-band { display: flex; align-items: center; gap: 8px; padding: 4px 10px; margin: -1px -1px 0; border: 1px solid var(--off); border-bottom: 0; color: var(--dim); font-size: 11px; }
+  .off-band b { color: var(--off); font-weight: normal; }
+  .off-band .sp { flex: 1; }
+  .off-band kbd { color: var(--text); font: inherit; }
+  .composer[data-off] { border-color: var(--off) !important; }
+
+  /* O3: pick is one-shot by default; a pin makes it the new default. */
+  .pin { margin-left: 6px; color: var(--faint); font-size: 11px; }
+  .pin[data-on] { color: var(--off); }
+
+  /* O4: only the harness name changes colour. */
+  .model[data-tint] .model-harness { color: var(--off); }
+
+  .codex { --off: var(--nick-codex); }
+  .claude { --off: var(--nick-claude); }
+</style></head><body><div class="page">
+
+<section>
+  <p class="lbl">O0 · today</p>
+  <p class="why">codex reads the same as the default. Nothing says the pick is sticky.</p>
+  <div class="launch"><div class="composer" data-boxed><div class="composer-bar">
+    <div class="composer-stack"><textarea class="composer-input" rows="2" placeholder="Describe the task…"></textarea></div>
+    <div class="composer-tools"><button class="model"><span class="model-harness">codex</span><span class="model-name">gpt-6-astra</span><span class="model-effort">xhigh</span><span class="model-mode" data-tone="skip">bypass</span></button></div>
+  </div></div></div>
+</section>
+
+<section class="codex">
+  <p class="lbl">O4 · only the harness name in its nick colour</p>
+  <p class="why">No border, no extra chip. The harness name turns codex's colour while the pick differs from the default.</p>
+  <div class="launch"><div class="composer" data-boxed><div class="composer-bar">
+    <div class="composer-stack"><textarea class="composer-input" rows="2" placeholder="Describe the task…"></textarea></div>
+    <div class="composer-tools"><button class="model" data-tint><span class="model-harness">codex</span><span class="model-name">gpt-6-astra</span><span class="model-effort">xhigh</span><span class="model-mode" data-tone="skip">bypass</span></button></div>
+  </div></div></div>
+</section>
+
+<section class="codex">
+  <p class="lbl">O1 · chip outlined in the harness colour + reset</p>
+  <p class="why">Smallest change. The chip is boxed in codex's nick colour only while it differs from <code>[agent]</code> in floe.toml. <kbd>⌃0</kbd> snaps back.</p>
+  <div class="launch"><div class="composer" data-boxed><div class="composer-bar">
+    <div class="composer-stack"><textarea class="composer-input" rows="2" placeholder="Describe the task…"></textarea></div>
+    <div class="composer-tools"><button class="model" data-off><span class="model-harness">codex</span><span class="model-name">gpt-6-astra</span><span class="model-effort">xhigh</span><span class="model-mode" data-tone="skip">bypass</span></button><button class="off-reset"><kbd>⌃0</kbd> default</button></div>
+  </div></div></div>
+</section>
+
+<section class="codex">
+  <p class="lbl">O2 · band on the card + tinted border</p>
+  <p class="why">Loudest. Names what the default is, so you see both sides before sending.</p>
+  <div class="launch">
+    <div class="off-band"><span>not default ·</span><b>codex gpt-6-astra</b><span>· default claude opus-5</span><span class="sp"></span><span><kbd>⌃0</kbd> reset</span></div>
+    <div class="composer" data-boxed data-off><div class="composer-bar">
+      <div class="composer-stack"><textarea class="composer-input" rows="2" placeholder="Describe the task…"></textarea></div>
+      <div class="composer-tools"><button class="model" data-off><span class="model-harness">codex</span><span class="model-name">gpt-6-astra</span><span class="model-effort">xhigh</span><span class="model-mode" data-tone="skip">bypass</span></button></div>
+    </div></div>
+  </div>
+</section>
+
+<section class="codex">
+  <p class="lbl">O3 · O1 + the pick is one-shot unless pinned</p>
+  <p class="why">Fixes the cause, not only the signal. Picking a model applies to the next session only, then the launcher returns to the default. <kbd>p</kbd> in the model menu pins it (the old behaviour).</p>
+  <div class="launch"><div class="composer" data-boxed><div class="composer-bar">
+    <div class="composer-stack"><textarea class="composer-input" rows="2" placeholder="Describe the task…"></textarea></div>
+    <div class="composer-tools"><button class="model" data-off><span class="model-harness">codex</span><span class="model-name">gpt-6-astra</span><span class="model-effort">xhigh</span><span class="model-mode" data-tone="skip">bypass</span></button><span class="pin">once</span></div>
+  </div></div></div>
+  <div class="launch" style="margin-top:10px"><div class="composer" data-boxed><div class="composer-bar">
+    <div class="composer-stack"><textarea class="composer-input" rows="2" placeholder="Describe the task…"></textarea></div>
+    <div class="composer-tools"><button class="model" data-off><span class="model-harness">codex</span><span class="model-name">gpt-6-astra</span><span class="model-effort">xhigh</span><span class="model-mode" data-tone="skip">bypass</span></button><span class="pin" data-on>pinned</span></div>
+  </div></div></div>
+</section>
+
+<section>
+  <p class="lbl">default state (all options)</p>
+  <p class="why">On the floe.toml default nothing extra renders.</p>
+  <div class="launch"><div class="composer" data-boxed><div class="composer-bar">
+    <div class="composer-stack"><textarea class="composer-input" rows="2" placeholder="Describe the task…"></textarea></div>
+    <div class="composer-tools"><button class="model"><span class="model-harness">claude</span><span class="model-name">opus-5</span><span class="model-effort">high</span><span class="model-mode" data-tone="default">ask</span></button></div>
+  </div></div></div>
+</section>
+
+</div>
+<script>
+  const q = new URLSearchParams(location.search)
+  if (q.get('theme')) document.documentElement.dataset.theme = q.get('theme')
+</script>
+</body></html>

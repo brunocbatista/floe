@@ -43,6 +43,7 @@ import { continueList, tokenizeMarkdown } from './markdown'
 import { applyTrigger, refBefore, triggerAt, type Trigger } from './trigger'
 import { capGroups, filterItems, type PaletteItem } from './fuzzy'
 import {
+  defaultChoice,
   describeChoice,
   EFFORTS,
   loadChoice,
@@ -52,6 +53,7 @@ import {
 } from './models'
 import { DEFAULT_MODE, MODES, modesFor, nearestMode } from '../../shared/modes.ts'
 import { useLocalAgents } from './useLocalAgents'
+import { nickColor } from './nickColor'
 import { pushHistory, readHistory } from './history'
 import { usePending } from './drafts'
 import { useVimEnabled } from './appearance'
@@ -285,6 +287,11 @@ export function Composer({
   // Other AI runtimes on this machine, listed under the built-in models.
   const agents = useLocalAgents()
   const picked = describeChoice(choice)
+  // A harness other than floe.toml's takes its nick colour: a pick made for one
+  // task is otherwise easy to carry, unnoticed, into the next session.
+  const harness = choice.provider ?? 'claude'
+  const offHarness =
+    harness === (defaultChoice().provider ?? 'claude') ? undefined : { color: nickColor(harness) }
   const [picking, setPicking] = useState(false)
 
   const choose = (next: Partial<ModelChoice>) => {
@@ -1230,7 +1237,9 @@ export function Composer({
               unchanged and still picks all four. */}
           {boxed ? (
             <>
-              <span className="model-harness">{picked.harness}</span>
+              <span className="model-harness" style={offHarness}>
+                {picked.harness}
+              </span>
               {picked.model && <span className="model-name">{picked.model}</span>}
               <span className="model-effort">{picked.effort}</span>
               {modes.length > 0 && (
@@ -1244,7 +1253,9 @@ export function Composer({
               {picked.mode}
             </span>
           ) : (
-            <span className="model-harness">{picked.harness}</span>
+            <span className="model-harness" style={offHarness}>
+              {picked.harness}
+            </span>
           )}
           <IconChevronDown size={13} stroke={1.8} />
         </button>
