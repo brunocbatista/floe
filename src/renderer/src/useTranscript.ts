@@ -412,6 +412,7 @@ export function useTranscript(worktreePath?: string, sessionId?: string): Transc
           summary: event.description,
           harness: event.harness ?? 'claude',
           background: event.background,
+          agentKey: event.agentKey,
           running: true,
           at: Date.now()
         }
@@ -420,7 +421,7 @@ export function useTranscript(worktreePath?: string, sessionId?: string): Transc
       dispatch({
         type: 'agent',
         toolUseId: event.toolUseId,
-        patch: { agentTokens: event.tokens, lastTool: event.tool }
+        patch: { agentTokens: event.tokens || undefined, lastTool: event.tool, agentKey: event.agentKey }
       })
     } else if (event.kind === 'subagent-done') {
       dispatch({

@@ -162,6 +162,10 @@ export interface TranscriptItem {
   agentTokens?: number
   // A Workflow agent, still running after the turn that launched it ended.
   background?: boolean
+  // An async Claude agent's own transcript, as a session key the transcript
+  // loader understands (`agent-<agentId>`, see loadAgentTranscript). Set once
+  // the launch ack names the agent; the row opens it read-only.
+  agentKey?: string
 }
 
 function extractText(message: unknown): string {
@@ -622,22 +626,88 @@ export function isSkillBody(text: string): boolean {
   return /^Base directory for this skill: \S/.test(text)
 }
 
+export interface TaskNotice {
+  toolUseId?: string
+  taskId?: string
+  result?: string
+}
+
 // What a notification says: which agent finished (the id of the Task call that
-// launched it) and, when it is an agent rather than a background command, the
-// report it came back with. That report is the agent talking to the session
-// that sent it — the only place its words exist.
-export function parseTaskNotifications(text: string): Array<{ toolUseId: string; result?: string }> {
-  const out: Array<{ toolUseId: string; result?: string }> = []
+// launched it, and the agent's own id) and, when it is an agent rather than a
+// background command, the report it came back with. That report is the agent
+// talking to the session that sent it — the only place its words exist.
+//
+// The tool-use id is not always there: an agent stopped by a CLI restart, or
+// one resumed over SendMessage, is reported by its agent id (`<task-id>`) alone.
+export function parseTaskNotifications(text: string): TaskNotice[] {
+  const out: TaskNotice[] = []
   // Per block, never over the whole string: two agents finishing at once are
   // delivered as adjacent blocks, and matching across them would hand the first
   // agent's id the second agent's report.
   for (const [, block] of text.matchAll(/<task-notification>([\s\S]*?)<\/task-notification>/g)) {
-    const toolUseId = block.match(/<tool-use-id>([^<]+)<\/tool-use-id>/)?.[1]?.trim()
-    if (!toolUseId) continue
+    const toolUseId = block.match(/<tool-use-id>([^<]+)<\/tool-use-id>/)?.[1]?.trim() || undefined
+    const taskId = block.match(/<task-id>([^<]+)<\/task-id>/)?.[1]?.trim() || undefined
+    if (!toolUseId && !taskId) continue
     const result = block.match(/<result>([\s\S]*?)<\/result>/)?.[1]?.trim()
-    out.push({ toolUseId, result: result || undefined })
+    out.push({ toolUseId, taskId, result: result || undefined })
   }
   return out
+}
+
+// The agent id an async launch ack names (`agentId: a531407dc6506aa34`): the
+// key its own transcript is filed under, and what SendMessage addresses.
+export function asyncAgentId(text: string | undefined): string | undefined {
+  return text?.match(/agentId:\s*([a-z0-9]+)/)?.[1]
+}
+
+// SendMessage to a stopped agent restarts it, and says so in its result
+// (`{"success":true,"resumedAgentId":"…"}`). A message to an agent that is
+// still running is only queued, and names no resumed agent.
+export function resumedAgentId(text: string | undefined): string | undefined {
+  if (!text?.includes('resumedAgentId')) return undefined
+  try {
+    const id = (JSON.parse(text) as { resumedAgentId?: unknown }).resumedAgentId
+    return typeof id === 'string' && /^[a-z0-9]+$/.test(id) ? id : undefined
+  } catch {
+    return undefined
+  }
+}
+
+// Where the CLI files an agent's own transcript:
+// <project dir>/<session id>/subagents/agent-<id>.jsonl. Searched across the
+// worktree's sessions rather than derived from one: a resumed CLI can carry the
+// agent under a session id other than the one the chat is showing now.
+export function agentTranscriptFile(worktreePath: string, agentId: string): string | undefined {
+  if (!worktreePath || !/^[a-z0-9]+$/.test(agentId)) return undefined
+  const dir = join(projectsDir(), encode(worktreePath))
+  let sessions: string[]
+  try {
+    sessions = readdirSync(dir)
+  } catch {
+    return undefined
+  }
+  for (const s of sessions) {
+    const file = join(dir, s, 'subagents', `agent-${agentId}.jsonl`)
+    if (existsSync(file)) return file
+  }
+  return undefined
+}
+
+// The agent's launch, as the CLI recorded it beside the transcript: what it was
+// sent to do and as which type. A resumed agent's row reads its name here —
+// the SendMessage that restarted it only says what was added.
+export function agentMeta(worktreePath: string, agentId: string): { description?: string; agentType?: string } {
+  const file = agentTranscriptFile(worktreePath, agentId)
+  if (!file) return {}
+  try {
+    const m = JSON.parse(readFileSync(file.replace(/\.jsonl$/, '.meta.json'), 'utf8')) as Record<string, unknown>
+    return {
+      description: typeof m.description === 'string' ? m.description : undefined,
+      agentType: typeof m.agentType === 'string' ? m.agentType : undefined
+    }
+  } catch {
+    return {}
+  }
 }
 
 // The Agent tool's async launch returns this the moment the agent starts, long
@@ -759,21 +829,27 @@ function agentReply(row: TranscriptItem, text: string): TranscriptItem {
 // can finish into one message; each closes its own row, in delivery order.
 // Returns whether any row here was ours: a notification for an agent this
 // transcript never opened is plumbing, and must not print.
-function closeAgentRows(
-  items: TranscriptItem[],
-  agentRows: Map<string, number>,
-  notices: Array<{ toolUseId: string; result?: string }>,
-  at: number | undefined
-): boolean {
-  const mine = notices.filter((n) => agentRows.has(n.toolUseId))
-  for (const notice of mine) {
-    const row = items[agentRows.get(notice.toolUseId) as number]
+function closeAgentRows(ctx: TranscriptCtx, notices: TaskNotice[], at: number | undefined): boolean {
+  let closed = false
+  for (const notice of notices) {
+    const index = noticeRow(ctx, notice)
+    if (index === undefined) continue
+    const row = ctx.items[index]
     row.running = false
     if (at && row.at && at >= row.at) row.ms = at - row.at
-    agentRows.delete(notice.toolUseId)
-    if (notice.result) items.push(agentReply(row, notice.result))
+    if (row.toolUseId) ctx.agentRows.delete(row.toolUseId)
+    closed = true
+    if (notice.result) ctx.items.push(agentReply(row, notice.result))
   }
-  return mine.length > 0
+  return closed
+}
+
+// The open row a notification is about: by the launching call's id, or — when
+// the notice carries only the agent's id — by the agent it names.
+function noticeRow(ctx: TranscriptCtx, notice: TaskNotice): number | undefined {
+  if (notice.toolUseId && ctx.agentRows.has(notice.toolUseId)) return ctx.agentRows.get(notice.toolUseId)
+  const at = notice.taskId ? ctx.agentIds.get(notice.taskId) : undefined
+  return at !== undefined && ctx.items[at].running ? at : undefined
 }
 
 // --- the JSONL walk ---------------------------------------------------------
@@ -790,6 +866,12 @@ interface TranscriptCtx {
   // Task/Agent tool_use id → the index of the subagent row it opened, so its
   // tool_result (arriving lines later) can close the row it belongs to.
   agentRows: Map<string, number>
+  // Agent id → its latest row: a notification may name only the agent, and a
+  // SendMessage that resumes one opens a fresh row for the same agent.
+  agentIds: Map<string, number>
+  // SendMessage tool_use ids still waiting on their result.
+  sends: Set<string>
+  worktreePath: string
 }
 
 // The claude CLI stamps each line with an ISO `timestamp`; carry it onto every
@@ -884,7 +966,7 @@ function handleAttachment(ctx: TranscriptCtx, m: Record<string, unknown>): void 
   // Reloading it verbatim pasted the notification into the chat under your nick;
   // it still has to close the row it belongs to.
   if (isTaskNotification(prompt)) {
-    closeAgentRows(ctx.items, ctx.agentRows, parseTaskNotifications(prompt), at)
+    closeAgentRows(ctx, parseTaskNotifications(prompt), at)
     return
   }
   ctx.items.push({ role: 'user', text: prompt, at })
@@ -902,7 +984,7 @@ function pushStringContent(
   // Everything else about the notification is plumbing (see expandUserText,
   // which drops it).
   const notices = role === 'user' && isTaskNotification(content) ? parseTaskNotifications(content) : []
-  if (closeAgentRows(ctx.items, ctx.agentRows, notices, at)) return // the rows spoke for themselves
+  if (closeAgentRows(ctx, notices, at)) return // the rows spoke for themselves
   if (role === 'user') ctx.items.push(...expandUserText(content))
   else if (content.trim()) ctx.items.push({ role, text: content })
 }
@@ -982,6 +1064,27 @@ function openAgentRow(ctx: TranscriptCtx, block: Record<string, unknown>, at: nu
   })
 }
 
+// SendMessage restarted a stopped agent: it is working again, so it gets a
+// running row of its own — the same line a launch draws, named from the
+// agent's recorded launch.
+function openResumedRow(ctx: TranscriptCtx, id: string, agentId: string, at: number | undefined): void {
+  const open = ctx.agentIds.get(agentId)
+  if (open !== undefined && ctx.items[open].running) return
+  const meta = agentMeta(ctx.worktreePath, agentId)
+  ctx.agentRows.set(id, ctx.items.length)
+  ctx.agentIds.set(agentId, ctx.items.length)
+  ctx.items.push({
+    role: 'subagent',
+    toolUseId: id,
+    agentType: meta.agentType ?? 'agent',
+    summary: meta.description ?? '',
+    harness: 'claude',
+    running: true,
+    agentKey: `agent-${agentId}`,
+    at
+  })
+}
+
 function pushToolUse(ctx: TranscriptCtx, block: Record<string, unknown>, at: number | undefined): void {
   // A present_decision call rebuilds as the inline artifact panel (not a tool
   // row), mirroring the live stream — so reload round-trips it.
@@ -1008,6 +1111,7 @@ function pushToolUse(ctx: TranscriptCtx, block: Record<string, unknown>, at: num
     openAgentRow(ctx, block, at)
     return
   }
+  if (block.name === 'SendMessage' && typeof block.id === 'string') ctx.sends.add(block.id)
   ctx.items.push({ role: 'tool', name: String(block.name ?? 'tool'), summary: summarizeTool(block.input) })
 }
 
@@ -1023,7 +1127,14 @@ function closeAgentRowFromResult(
   // An async agent answers this call immediately with a launch ack and keeps
   // working: the row stays open, and its real report arrives later as a
   // <task-notification> (handled elsewhere, by the same id).
-  if (isAsyncLaunchAck(reply)) return
+  if (isAsyncLaunchAck(reply)) {
+    const agentId = asyncAgentId(reply)
+    if (agentId) {
+      row.agentKey = `agent-${agentId}`
+      ctx.agentIds.set(agentId, ctx.agentRows.get(id) as number)
+    }
+    return
+  }
   // A result the harness marked as an error is the tool failing, not the agent
   // talking: the row closes, but nothing is said in its name.
   const spoke = block.is_error !== true
@@ -1044,6 +1155,11 @@ function pushToolResult(ctx: TranscriptCtx, block: Record<string, unknown>, at: 
   }
   if (typeof id === 'string' && ctx.agentRows.has(id)) {
     closeAgentRowFromResult(ctx, block, id, at)
+    return
+  }
+  if (typeof id === 'string' && ctx.sends.delete(id)) {
+    const agentId = resumedAgentId(resultText(block.content))
+    if (agentId) openResumedRow(ctx, id, agentId, at)
     return
   }
   // Images returned by a tool (e.g. Read of a PNG) — show what Claude saw.
@@ -1088,7 +1204,20 @@ function pushBlocks(
 }
 
 export function loadClaudeTranscript(worktreePath: string, sessionId: string): TranscriptItem[] {
-  const file = join(projectsDir(), encode(worktreePath), `${sessionId}.jsonl`)
+  const agent = sessionId.match(/^agent-([a-z0-9]+)$/)?.[1]
+  if (agent) return loadAgentTranscript(worktreePath, agent)
+  return walkTranscript(join(projectsDir(), encode(worktreePath), `${sessionId}.jsonl`), worktreePath, false)
+}
+
+// One async agent's own conversation, read-only: its brief, its tool calls and
+// what it said. Every line in that file is a sidechain, so this is the one walk
+// that keeps them.
+export function loadAgentTranscript(worktreePath: string, agentId: string): TranscriptItem[] {
+  const file = agentTranscriptFile(worktreePath, agentId)
+  return file ? walkTranscript(file, worktreePath, true) : []
+}
+
+function walkTranscript(file: string, worktreePath: string, sidechain: boolean): TranscriptItem[] {
   if (!existsSync(file)) return []
   let raw: string
   try {
@@ -1096,7 +1225,14 @@ export function loadClaudeTranscript(worktreePath: string, sessionId: string): T
   } catch {
     return []
   }
-  const ctx: TranscriptCtx = { items: [], askIds: new Set<string>(), agentRows: new Map<string, number>() }
+  const ctx: TranscriptCtx = {
+    items: [],
+    askIds: new Set<string>(),
+    agentRows: new Map<string, number>(),
+    agentIds: new Map<string, number>(),
+    sends: new Set<string>(),
+    worktreePath
+  }
   // When the turn being read started, so an assistant message can carry how long
   // it took.
   let turnStartedAt: number | undefined
@@ -1111,7 +1247,7 @@ export function loadClaudeTranscript(worktreePath: string, sessionId: string): T
     // A subagent's own steps are written into the SAME file, flagged as a
     // sidechain. They are the child's transcript, not the parent's: replaying
     // them here would paste another agent's whole session into this one.
-    if (m.isSidechain === true) continue
+    if (m.isSidechain === true && !sidechain) continue
     const role = m.type as 'user' | 'assistant'
     const meta = readLineMeta(m, role)
     const content = (m.message as { content?: unknown } | null)?.content

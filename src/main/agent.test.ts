@@ -120,6 +120,10 @@ function fakeConn(over: Partial<Conn> = {}): Conn {
     permSuggestions: new Map(),
     subagents: new Set(),
     workflowRows: new Map(),
+    agentIds: new Map(),
+    sends: new Set(),
+    agentTails: new Map(),
+    agentTailTimer: null,
     transcriptBuffer: [],
     lastAssistantText: '',
     pendingDeltas: [],
@@ -1782,3 +1786,84 @@ test('stopAgentFor: stops the child behind any of a session’s names, with no w
   assert.deepEqual(spawn.child.signals, ['SIGTERM'])
   spawn.child.emit('close', 0)
 })
+
+// --- async agents: named by their ack, resumed over SendMessage -------------
+
+// An agent's own transcript where the CLI files it, plus the meta it writes
+// beside it: <project>/<session>/subagents/agent-<id>.{jsonl,meta.json}.
+function seedAgentFile(worktree: string, agentId: string, lines: unknown[], meta: Record<string, unknown> = {}): string {
+  const dir = join(HOME, '.claude', 'projects', worktree.replace(/[^a-zA-Z0-9]/g, '-'), 'sess', 'subagents')
+  mkdirSync(dir, { recursive: true })
+  const file = join(dir, `agent-${agentId}.jsonl`)
+  writeFileSync(file, lines.map((l) => JSON.stringify(l) + '\n').join(''))
+  writeFileSync(join(dir, `agent-${agentId}.meta.json`), JSON.stringify(meta))
+  return file
+}
+
+const sendResult = (id: string, text: string): unknown => ({
+  type: 'user',
+  message: { content: [{ type: 'tool_result', tool_use_id: id, content: [{ type: 'text', text }] }] }
+})
+
+test('handleLine: the async launch ack names the agent and hands its row the transcript key', () => {
+  const conn = fakeConn({ subagents: new Set(['t1']), worktreePath: WT })
+  const { events } = run(sendResult('t1', 'Async agent launched successfully.\nagentId: a1b2c3'), conn)
+  assert.deepEqual(only(events, 'subagent-progress'), [
+    { kind: 'subagent-progress', toolUseId: 't1', tokens: 0, agentKey: 'agent-a1b2c3' }
+  ])
+  assert.equal(conn.agentIds.get('a1b2c3'), 't1')
+  if (conn.agentTailTimer) clearInterval(conn.agentTailTimer)
+})
+
+test('handleLine: a notification naming only the agent id closes the row it runs under', () => {
+  const conn = fakeConn({ subagents: new Set(['t1']), agentIds: new Map([['a1b2c3', 't1']]) })
+  const { events } = run(
+    {
+      type: 'user',
+      message: { content: '<task-notification>\n<task-id>a1b2c3</task-id>\n<status>stopped</status>\n</task-notification>' }
+    },
+    conn
+  )
+  assert.deepEqual(only(events, 'subagent-done'), [{ kind: 'subagent-done', toolUseId: 't1' }])
+  assert.ok(!conn.subagents.has('t1'))
+})
+
+test('handleLine: SendMessage that resumes a stopped agent opens a running row named from its meta', () => {
+  seedAgentFile(WT, 'd4e5f6', [], { description: 'Port devbar to Vue', agentType: 'claude' })
+  const conn = fakeConn({ worktreePath: WT })
+  run({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 's1', name: 'SendMessage', input: { to: 'd4e5f6', message: 'go on' } }] } }, conn)
+  const { events } = run(
+    sendResult('s1', JSON.stringify({ success: true, message: 'Resuming agent d4e5f6', resumedAgentId: 'd4e5f6' })),
+    conn
+  )
+  assert.deepEqual(only(events, 'subagent-start'), [
+    {
+      kind: 'subagent-start',
+      toolUseId: 's1',
+      agentType: 'claude',
+      description: 'Port devbar to Vue',
+      harness: 'claude',
+      agentKey: 'agent-d4e5f6'
+    }
+  ])
+  assert.ok(conn.subagents.has('s1'), 'the resumed agent holds the turn like a launch does')
+  assert.equal(conn.agentIds.get('d4e5f6'), 's1')
+  if (conn.agentTailTimer) clearInterval(conn.agentTailTimer)
+  stopTaskWatcherForTest(conn)
+})
+
+test('handleLine: a message only queued for a running agent opens nothing', () => {
+  const conn = fakeConn({ worktreePath: WT })
+  run({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 's2', name: 'SendMessage', input: { to: 'd4e5f6' } }] } }, conn)
+  const { events } = run(sendResult('s2', JSON.stringify({ success: true, message: 'Message queued for delivery' })), conn)
+  assert.deepEqual(only(events, 'subagent-start'), [])
+  assert.equal(conn.sends.size, 0)
+})
+
+function stopTaskWatcherForTest(conn: Conn): void {
+  try {
+    conn.taskWatcher?.close()
+  } catch {
+    /* never opened */
+  }
+}

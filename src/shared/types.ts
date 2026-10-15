@@ -1136,8 +1136,12 @@ export type AgentEvent =
       // A Workflow agent: it outlives the turn that launched it, so the turn's
       // end does not close its row — its own `subagent-done` does.
       background?: boolean
+      // An async agent's own transcript (`agent-<id>`), when it is known at start.
+      agentKey?: string
     }
-  | { kind: 'subagent-progress'; toolUseId: string; tokens: number; tool?: string }
+  // `agentKey` rides progress too: an async agent is named by its launch ack,
+  // after the row opened.
+  | { kind: 'subagent-progress'; toolUseId: string; tokens: number; tool?: string; agentKey?: string }
   // `reply` is what the agent came back to say — the Task's tool_result, an
   // async agent's <task-notification> result, or the Codex bridge's answer. It
   // rides the done event because that is the only moment it exists in the

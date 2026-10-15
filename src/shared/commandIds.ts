@@ -185,6 +185,7 @@ export const COMMAND_IDS: string[] = [
   'query.showAll',
   // The subagent dock (the lanes this chat has working, in its corner)
   'subagents.toggle',
+  'subagents.watch',
   'chat.all',
   'worktree.new',
   'worktree.focusAt',

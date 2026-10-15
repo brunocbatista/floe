@@ -1132,3 +1132,111 @@ test('a screenshot in the JSONL loads as a served url, written to the cache once
     process.env.HOME = home
   }
 })
+
+// --- async agents: notices by agent id, resumed rows, the agent's own file ---
+
+test('parseTaskNotifications: a notice with only a task id is still a notice', async () => {
+  const { parseTaskNotifications } = await import('./claudeSessions.ts')
+  assert.deepEqual(parseTaskNotifications('<task-notification>\n<task-id>a8e2</task-id>\n<status>stopped</status>\n</task-notification>'), [
+    { toolUseId: undefined, taskId: 'a8e2', result: undefined }
+  ])
+})
+
+test('asyncAgentId / resumedAgentId read the agent id off the ack and the resume', async () => {
+  const { asyncAgentId, resumedAgentId } = await import('./claudeSessions.ts')
+  assert.equal(asyncAgentId('Async agent launched successfully.\nagentId: a531407dc6506aa34 (internal ID)'), 'a531407dc6506aa34')
+  assert.equal(resumedAgentId('{"success":true,"resumedAgentId":"a8e2e54408680bf7a"}'), 'a8e2e54408680bf7a')
+  assert.equal(resumedAgentId('{"success":true,"message":"Message queued for delivery"}'), undefined)
+  assert.equal(resumedAgentId('{"resumedAgentId":"../etc"}'), undefined)
+})
+
+test('a stopped agent resumed over SendMessage reloads as a closed row and a new running one', () => {
+  const home = process.env.HOME
+  const worktree = '/tmp/wt-resume'
+  const dir = seedSession(worktree, 'sess', [
+    {
+      type: 'assistant',
+      timestamp: '2026-10-15T17:52:00.000Z',
+      message: { content: [{ type: 'tool_use', id: 't1', name: 'Agent', input: { description: 'Port devbar', subagent_type: 'claude' } }] }
+    },
+    {
+      type: 'user',
+      timestamp: '2026-10-15T17:52:01.000Z',
+      message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: [{ type: 'text', text: 'Async agent launched successfully.\nagentId: a8e2' }] }] }
+    },
+    { type: 'user', timestamp: '2026-10-15T17:54:45.000Z', message: { content: '<task-notification>\n<task-id>a8e2</task-id>\n<status>stopped</status>\n</task-notification>' } },
+    {
+      type: 'assistant',
+      timestamp: '2026-10-15T17:55:00.000Z',
+      message: { content: [{ type: 'tool_use', id: 's1', name: 'SendMessage', input: { to: 'a8e2', message: 'resume' } }] }
+    },
+    {
+      type: 'user',
+      timestamp: '2026-10-15T17:55:01.000Z',
+      message: { content: [{ type: 'tool_result', tool_use_id: 's1', content: [{ type: 'text', text: '{"success":true,"resumedAgentId":"a8e2"}' }] }] }
+    }
+  ])
+  try {
+    const sub = join(dir, '.claude', 'projects', cliSlug(worktree), 'sess', 'subagents')
+    mkdirSync(sub, { recursive: true })
+    writeFileSync(join(sub, 'agent-a8e2.meta.json'), JSON.stringify({ description: 'Port devbar', agentType: 'claude' }))
+    writeFileSync(join(sub, 'agent-a8e2.jsonl'), '')
+    const rows = loadClaudeTranscript(worktree, 'sess').filter((i) => i.role === 'subagent')
+    assert.deepEqual(
+      rows.map((r) => ({ id: r.toolUseId, running: r.running, key: r.agentKey, summary: r.summary })),
+      [
+        { id: 't1', running: false, key: 'agent-a8e2', summary: 'Port devbar' },
+        { id: 's1', running: true, key: 'agent-a8e2', summary: 'Port devbar' }
+      ]
+    )
+  } finally {
+    process.env.HOME = home
+  }
+})
+
+test('an agent key loads that agent\'s own sidechain transcript', () => {
+  const home = process.env.HOME
+  const worktree = '/tmp/wt-agent'
+  const dir = seedSession(worktree, 'sess', [])
+  try {
+    const sub = join(dir, '.claude', 'projects', cliSlug(worktree), 'sess', 'subagents')
+    mkdirSync(sub, { recursive: true })
+    const lines = [
+      { type: 'user', isSidechain: true, timestamp: '2026-10-15T18:00:00.000Z', message: { content: 'Port the devbar' } },
+      { type: 'assistant', isSidechain: true, timestamp: '2026-10-15T18:00:05.000Z', message: { content: [{ type: 'text', text: 'Starting.' }] } }
+    ]
+    writeFileSync(join(sub, 'agent-a8e2.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n'))
+    const items = loadClaudeTranscript(worktree, 'agent-a8e2')
+    assert.deepEqual(items.map((i) => [i.role, i.text]), [
+      ['user', 'Port the devbar'],
+      ['assistant', 'Starting.']
+    ])
+    assert.deepEqual(loadClaudeTranscript(worktree, 'agent-nope'), [])
+  } finally {
+    process.env.HOME = home
+  }
+})
+
+test('agent tail: a resumed agent reports only what it does after the resume', async () => {
+  const { newAgentTail, scanAgentTail } = await import('./agentTail.ts')
+  const home = process.env.HOME
+  const worktree = '/tmp/wt-tail'
+  const dir = seedSession(worktree, 'sess', [])
+  try {
+    const sub = join(dir, '.claude', 'projects', cliSlug(worktree), 'sess', 'subagents')
+    mkdirSync(sub, { recursive: true })
+    const file = join(sub, 'agent-b7.jsonl')
+    const step = (tool: string, tokens: number): string =>
+      JSON.stringify({ type: 'assistant', message: { usage: { input_tokens: tokens }, content: [{ type: 'tool_use', name: tool }] } }) + '\n'
+    writeFileSync(file, step('Read', 100))
+    const tail = newAgentTail(worktree, 'b7', false)
+    assert.equal(scanAgentTail(tail, worktree), undefined, 'the earlier run is not replayed')
+    writeFileSync(file, step('Read', 100) + step('Bash', 5000) + '{"type":"assistant","mess')
+    assert.deepEqual(scanAgentTail(tail, worktree), { tokens: 5000, tool: 'Bash' })
+    assert.equal(tail.buffer, '{"type":"assistant","mess', 'a half-written line waits for the rest')
+    const fresh = newAgentTail(worktree, 'b7', true)
+    assert.deepEqual(scanAgentTail(fresh, worktree), { tokens: 5000, tool: 'Bash' })
+  } finally {
+    process.env.HOME = home
+  }
+})

@@ -57,8 +57,8 @@ import {
   type ReactNode
 } from 'react'
 import { QueryPanel } from './QueryPanel'
-import { LanePanel } from './LanePanel'
-import { DOCK_TOGGLE, useSubagents } from './useSubagents'
+import { AgentPanel, LanePanel } from './LanePanel'
+import { DOCK_TOGGLE, OPEN_AGENT, openAgentTranscript, useSubagents, type OpenAgentDetail } from './useSubagents'
 import { useQueries } from './useQueries'
 import { AllPicker } from './AllPicker'
 import { Composer } from './Composer'
@@ -1012,6 +1012,10 @@ export function PanelBody({
     ) : null
   // A subagent's own chat, read-only, opened from the dock. `sub` is the lane's
   // name — what its parent handed it to do.
+  // An async Claude agent: its own JSONL, read back on a timer — nothing about
+  // it streams, so there is no live session to point useTranscript at.
+  if (kind === 'lane' && session?.id.startsWith('agent-'))
+    return <AgentPanel session={session} title={sub ?? 'agent'} />
   if (kind === 'lane')
     return session ? (
       <LanePanel
@@ -2548,23 +2552,35 @@ function FileChip({ ref_ }: { ref_: string }) {
  * window: the question it answers is "which of these is doing the heavy work",
  * and that is a comparison between the lines you are looking at.
  */
-function SubagentGroup({ items }: { items: TranscriptItem[] }) {
+function SubagentGroup({ items, cwd }: { items: TranscriptItem[]; cwd?: string }) {
   const peak = Math.max(...items.map((i) => i.agentTokens ?? 0), 1)
   return (
     <div className="ag-group">
       {items.map((item, i) => (
-        <SubagentLine item={item} peak={peak} key={i} />
+        <SubagentLine item={item} peak={peak} cwd={cwd} key={i} />
       ))}
     </div>
   )
 }
 
-function SubagentLine({ item, peak }: { item: TranscriptItem; peak: number }) {
+function SubagentLine({ item, peak, cwd }: { item: TranscriptItem; peak: number; cwd?: string }) {
   const running = !!item.running
   const tokens = item.agentTokens ?? 0
+  // An async Claude agent's work is in its own transcript: the row opens it.
+  // `subagents.watch` is the keyboard way to the same panel.
+  const key = item.agentKey
+  const openIt =
+    key && cwd
+      ? () => openAgentTranscript({ key, title: item.summary || item.agentType || 'agent', worktreePath: cwd })
+      : undefined
   return (
     <>
-      <div className="irc-body irc-act ag-line">
+      <div
+        className="irc-body irc-act ag-line"
+        data-open={openIt ? '' : undefined}
+        onClick={openIt}
+        title={openIt ? 'Open this agent’s transcript' : undefined}
+      >
         <span className="irc-star">*</span>
         {running ? <Spinner /> : <span className="ag-dot">◇</span>}
         <span className="ag-desc">
@@ -3079,7 +3095,7 @@ export const Log = memo(function Log({
       const at = i
       while (i < items.length && items[i].role === 'subagent') run.push(items[i++])
       i--
-      out.push(<SubagentGroup items={run} key={base + at} />)
+      out.push(<SubagentGroup items={run} cwd={cwd} key={base + at} />)
       continue
     }
 
@@ -6031,6 +6047,15 @@ function ChatDock({
   session?: { id: string; worktreePath: string }
   onOpen?: OpenFn
 }): ReactNode {
+  useEffect(() => {
+    const onAgent = (e: Event): void => {
+      const d = (e as CustomEvent<OpenAgentDetail>).detail
+      if (!d || d.worktreePath !== session?.worktreePath) return
+      onOpen?.({ kind: 'lane', sub: d.title, session: { id: d.key, worktreePath: d.worktreePath } })
+    }
+    window.addEventListener(OPEN_AGENT, onAgent)
+    return () => window.removeEventListener(OPEN_AGENT, onAgent)
+  }, [session?.worktreePath, onOpen])
   return (
     <div className="dock-stack">
       <QueryDock session={session} onOpen={onOpen} />

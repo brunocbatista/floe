@@ -3455,6 +3455,13 @@ button {
 
 /* Everything except the description holds its width, so five agents line up as
    a column you can read straight down. */
+/* An async agent's row opens its transcript. */
+.ag-line[data-open] {
+  cursor: pointer;
+}
+.ag-line[data-open]:hover .ag-desc {
+  text-decoration: underline;
+}
 .ag-line > .irc-star,
 .ag-dot,
 .ag-h,

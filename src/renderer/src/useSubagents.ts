@@ -149,3 +149,21 @@ export const DOCK_TOGGLE = 'floe:subagent-dock-toggle'
 export function toggleSubagentDock(): void {
   window.dispatchEvent(new CustomEvent(DOCK_TOGGLE))
 }
+
+/**
+ * Open an async Claude agent's own transcript beside the chat that launched it.
+ *
+ * The agent row lives deep in the Log, which has no way to open a panel; the
+ * chat's corner does. Scoped by worktree so a second chat elsewhere stays put.
+ */
+export const OPEN_AGENT = 'floe:open-agent'
+
+export interface OpenAgentDetail {
+  key: string
+  title: string
+  worktreePath: string
+}
+
+export function openAgentTranscript(detail: OpenAgentDetail): void {
+  window.dispatchEvent(new CustomEvent<OpenAgentDetail>(OPEN_AGENT, { detail }))
+}

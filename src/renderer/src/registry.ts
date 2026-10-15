@@ -2773,6 +2773,35 @@ export const REGISTRY: Map<string, Command> = new Map(
         run: () => toggleSubagentDock()
       },
       {
+        // An async Claude agent works out of sight: the CLI writes its steps to
+        // its own transcript and none of them reach the chat. This opens that
+        // transcript — the newest agent still running, else the newest one.
+        id: 'subagents.watch',
+        title: 'Watch the latest Claude agent',
+        group: 'Queries',
+        enabled: (c) => !!chatOf(c)?.session,
+        run: (c) => {
+          const session = chatOf(c)?.session
+          if (!session) return
+          const { id, worktreePath } = session
+          void window.floe.claude
+            .transcript(worktreePath, id)
+            .then((items) => {
+              const agents = items.filter((i) => i.role === 'subagent' && i.agentKey)
+              const row = [...agents].reverse().find((i) => i.running) ?? agents.at(-1)
+              if (!row?.agentKey) return c.say('No Claude agent in this chat.')
+              const key = row.agentKey
+              c.setLane((l) =>
+                open(l, {
+                  ...c.makePanel('lane', row.summary || row.agentType || 'agent'),
+                  session: { id: key, worktreePath }
+                })
+              )
+            })
+            .catch((e) => c.say(reason(e)))
+        }
+      },
+      {
         // The way back from a discard. The conversation is still on disk under
         // its own key — the dead line in the chat is what remembers it.
         id: 'query.reopen',

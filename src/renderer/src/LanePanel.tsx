@@ -1,4 +1,5 @@
-import { useLayoutEffect, useMemo, useRef } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type { TranscriptItem } from '../../main/claudeSessions'
 import { Spinner } from './Spinner'
 import { Log, TailEntry, TypingMeter } from './panels'
 import { useTranscript } from './useTranscript'
@@ -108,6 +109,89 @@ export function LanePanel({
         <button className="query-act" onClick={onOpen}>
           open as chat
         </button>
+      </div>
+    </div>
+  )
+}
+
+/** How often an agent's transcript is read back while its panel is open. */
+const AGENT_POLL_MS = 1500
+
+/**
+ * An async Claude agent's own conversation, read-only.
+ *
+ * Unlike a lane, nothing about it streams: the CLI runs it detached and only
+ * writes it to disk (`<session>/subagents/agent-<id>.jsonl`). So the panel reads
+ * that file back on a timer instead of subscribing to events. The key is
+ * `agent-<id>`, which the transcript loader resolves to the file.
+ */
+export function AgentPanel({
+  session,
+  title
+}: {
+  session: { id: string; worktreePath: string }
+  title: string
+}) {
+  const [items, setItems] = useState<TranscriptItem[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string>()
+
+  useEffect(() => {
+    let alive = true
+    const read = (): void => {
+      window.floe.claude
+        .transcript(session.worktreePath, session.id)
+        .then((list) => {
+          if (!alive) return
+          setError(undefined)
+          // Same length means nothing new: skip the render so a reader's
+          // selection is not thrown away every tick.
+          setItems((prev) => (prev.length === list.length ? prev : list))
+        })
+        .catch((e: Error) => alive && setError(e.message))
+        .finally(() => alive && setLoading(false))
+    }
+    read()
+    const timer = setInterval(read, AGENT_POLL_MS)
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+  }, [session.worktreePath, session.id])
+
+  const bodyRef = useRef<HTMLDivElement>(null)
+  const pinned = useRef(true)
+  useLayoutEffect(() => {
+    const el = bodyRef.current
+    if (el && pinned.current) el.scrollTop = el.scrollHeight
+  }, [items])
+
+  return (
+    <div className="query-panel lane-panel">
+      <div className="lane-head">
+        <span className="ag-dot">◇</span>
+        <span className="lane-title">{title}</span>
+      </div>
+      <div
+        className="chat query-body"
+        ref={bodyRef}
+        onScroll={() => {
+          const el = bodyRef.current
+          if (el) pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 24
+        }}
+      >
+        {loading && <div className="irc-sys">Reading the agent…</div>}
+        {error && (
+          <div className="irc-sys" data-error>
+            <span className="irc-star">***</span> {error}
+          </div>
+        )}
+        {!loading && !error && !items.length && (
+          <div className="irc-sys">
+            <span className="irc-star">***</span> Nothing yet.
+          </div>
+        )}
+        <Log items={items} cwd={session.worktreePath} />
       </div>
     </div>
   )

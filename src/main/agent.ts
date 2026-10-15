@@ -14,7 +14,18 @@ import { colonySessionIds } from './colony/store'
 // instead of silently answering `undefined`. See identity.ts.
 import { agentIdentityNames, agentResumeId, linkAgentIdentity } from './identity'
 import { isQueryKey } from '../shared/queries'
-import { isAsyncLaunchAck, isTaskNotification, parsePeerMessage, parseTaskNotifications, resultText } from './claudeSessions'
+import {
+  agentMeta,
+  asyncAgentId,
+  isAsyncLaunchAck,
+  isTaskNotification,
+  parsePeerMessage,
+  parseTaskNotifications,
+  resultText,
+  resumedAgentId,
+  type TaskNotice
+} from './claudeSessions'
+import { newAgentTail, scanAgentTail, type AgentTail } from './agentTail'
 // Circular with handoff (it imports sendAgentEvent) — safe: both sides only
 // call the other's functions at runtime, never at module top level.
 import { seedFor } from './handoff'
@@ -40,6 +51,10 @@ export interface Conn {
   permSuggestions: Map<string, unknown[]> // requestId → the CLI's permission_suggestions, saved on "don't ask again"
   subagents: Set<string> // active Task/Agent tool_use ids → emit `done` when their result returns
   workflowRows: Map<string, boolean> // `<Workflow tool_use id>#<agent index>` → row still open (see handleWorkflowProgress)
+  agentIds: Map<string, string> // async agent id → the row (tool_use id) it is running under now
+  sends: Set<string> // SendMessage tool_use ids awaiting their result (a resume opens a row)
+  agentTails: Map<string, AgentTail> // row id → its agent's own transcript, read for live progress (see agentTail.ts)
+  agentTailTimer: NodeJS.Timeout | null
   // The MCP control server reads these so another session can watch this one:
   transcriptBuffer: string[] // recent human-readable lines (assistant text + tool summaries), capped
   lastAssistantText: string // assistant text accumulated this turn, returned to a waiting send_message(wait)
@@ -605,6 +620,10 @@ function spawnConn(win: BrowserWindow, key: string, worktreePath: string, option
     permSuggestions: new Map(),
     subagents: new Set(),
     workflowRows: new Map(),
+    agentIds: new Map(),
+    sends: new Set(),
+    agentTails: new Map(),
+    agentTailTimer: null,
     transcriptBuffer: [],
     lastAssistantText: '',
     pendingDeltas: [],
@@ -1364,6 +1383,7 @@ export function runWatchdogTick(entries: Iterable<[string, Conn]>, now: number):
         // now-unknown id just logs `subagent-notify-unmatched`, harmless).
         for (const id of conn.subagents) send(conn.win, key, { kind: 'subagent-done', toolUseId: id })
         conn.subagents.clear()
+        stopAgentTails(conn)
         conn.turnActive = false
         conn.turnClosed = true
         conn.heldForSubagentsAt = null
@@ -1790,6 +1810,70 @@ function startSubagent(win: BrowserWindow, key: string, conn: Conn, block: Recor
   })
 }
 
+// The open row a notification is about: by the launching call's id, or — for
+// an agent stopped by a restart or resumed over SendMessage, whose notice may
+// carry only its own id — by the row that agent is running under now.
+function noticeRowId(conn: Conn, notice: TaskNotice): string | undefined {
+  if (notice.toolUseId && conn.subagents.has(notice.toolUseId)) return notice.toolUseId
+  const row = notice.taskId ? conn.agentIds.get(notice.taskId) : undefined
+  return row && conn.subagents.has(row) ? row : undefined
+}
+
+// An async agent has a name now (the launch ack, or the SendMessage that
+// resumed it): remember which row it runs under, hand the row the key its own
+// transcript opens with, and start reading that transcript for live progress.
+function trackAgent(win: BrowserWindow, key: string, conn: Conn, rowId: string, agentId: string, fromStart: boolean): void {
+  conn.agentIds.set(agentId, rowId)
+  conn.agentTails.set(rowId, newAgentTail(conn.worktreePath, agentId, fromStart))
+  send(win, key, { kind: 'subagent-progress', toolUseId: rowId, tokens: 0, agentKey: `agent-${agentId}` })
+  if (conn.agentTailTimer) return
+  conn.agentTailTimer = setInterval(() => scanAgentTails(win, key, conn), AGENT_TAIL_MS)
+  conn.agentTailTimer.unref?.()
+}
+
+const AGENT_TAIL_MS = 1000
+
+function scanAgentTails(win: BrowserWindow, key: string, conn: Conn): void {
+  if (conns.get(key) !== conn) return stopAgentTails(conn)
+  for (const [rowId, tail] of conn.agentTails) {
+    const step = scanAgentTail(tail, conn.worktreePath)
+    if (step)
+      send(win, key, { kind: 'subagent-progress', toolUseId: rowId, tokens: step.tokens, tool: step.tool, agentKey: `agent-${tail.agentId}` })
+  }
+}
+
+function stopAgentTail(conn: Conn, rowId: string): void {
+  conn.agentTails.delete(rowId)
+  if (conn.agentTails.size === 0) stopAgentTails(conn)
+}
+
+function stopAgentTails(conn: Conn): void {
+  conn.agentTails.clear()
+  if (conn.agentTailTimer) clearInterval(conn.agentTailTimer)
+  conn.agentTailTimer = null
+}
+
+// SendMessage restarted a stopped agent. It is working again, so it gets a
+// running row like a launch does — named from the agent's recorded launch, since
+// the message only says what was added — and holds the turn the same way.
+function resumeSubagent(win: BrowserWindow, key: string, conn: Conn, rowId: string, agentId: string): void {
+  const open = conn.agentIds.get(agentId)
+  if (open && conn.subagents.has(open)) return
+  const meta = agentMeta(conn.worktreePath, agentId)
+  conn.subagents.add(rowId)
+  ensureTaskWatcher(win, key, conn)
+  log('subagent-resume', { key, id: rowId, agentId, outstanding: conn.subagents.size })
+  send(win, key, {
+    kind: 'subagent-start',
+    toolUseId: rowId,
+    agentType: meta.agentType ?? 'agent',
+    description: meta.description ?? '',
+    harness: 'claude',
+    agentKey: `agent-${agentId}`
+  })
+  trackAgent(win, key, conn, rowId, agentId, false)
+}
+
 // The present_decision tool renders as an inline decision panel, not a tool
 // card. Emit the artifact (after flushing any streamed text so it lands in
 // order). Answers `false` on a malformed spec so the caller falls through to the
@@ -1815,6 +1899,7 @@ function handleAssistantBlock(win: BrowserWindow, key: string, conn: Conn, block
   if (block.name === 'AskUserQuestion') return
   if ((block.name === 'Task' || block.name === 'Agent') && typeof block.id === 'string')
     return startSubagent(win, key, conn, block, block.id)
+  if (block.name === 'SendMessage' && typeof block.id === 'string') conn.sends.add(block.id)
   const toolName = String(block.name ?? 'tool')
   const toolSummary = summarizeTool(block)
   pushTranscript(conn, `[tool ${toolName}]${toolSummary ? ` ${toolSummary}` : ''}`)
@@ -1842,14 +1927,15 @@ function handleAssistantLine(win: BrowserWindow, key: string, conn: Conn, msg: R
 // tracked, running, holding the turn open.
 function closeNotifiedSubagents(win: BrowserWindow, key: string, conn: Conn, content: string): void {
   for (const notice of parseTaskNotifications(content)) {
-    const id = notice.toolUseId
-    if (!conn.subagents.has(id)) {
+    const id = noticeRowId(conn, notice)
+    if (!id) {
       // A notification whose id we don't recognise can't clear its row —
       // this is exactly how a turn strands "Thinking…" forever. Record it.
-      log('subagent-notify-unmatched', { key, id, outstanding: conn.subagents.size })
+      log('subagent-notify-unmatched', { key, id: notice.toolUseId ?? notice.taskId, outstanding: conn.subagents.size })
       continue
     }
     conn.subagents.delete(id)
+    stopAgentTail(conn, id)
     log('subagent-done', { key, id, via: 'notification', outstanding: conn.subagents.size })
     // `reply` is the agent reporting back: it speaks in the channel under
     // its own nick. For an async agent this notification is the ONLY place
@@ -1868,8 +1954,14 @@ function closeNotifiedSubagents(win: BrowserWindow, key: string, conn: Conn, con
 function closeBlockingSubagent(win: BrowserWindow, key: string, conn: Conn, block: Record<string, unknown>): void {
   const resultFor = typeof block.tool_use_id === 'string' ? block.tool_use_id : ''
   const reply = resultText(block.content)
-  if (!resultFor || !conn.subagents.has(resultFor) || isAsyncLaunchAck(reply)) return
+  if (!resultFor || !conn.subagents.has(resultFor)) return
+  if (isAsyncLaunchAck(reply)) {
+    const agentId = asyncAgentId(reply)
+    if (agentId) trackAgent(win, key, conn, resultFor, agentId, true)
+    return
+  }
   conn.subagents.delete(resultFor)
+  stopAgentTail(conn, resultFor)
   log('subagent-done', { key, id: resultFor, via: 'tool_result', outstanding: conn.subagents.size })
   const spoken = block.is_error === true ? undefined : reply
   if (spoken) pushTranscript(conn, `agent: ${spoken}`)
@@ -1879,6 +1971,10 @@ function closeBlockingSubagent(win: BrowserWindow, key: string, conn: Conn, bloc
 function handleToolResultBlock(win: BrowserWindow, key: string, conn: Conn, block: Record<string, unknown>): void {
   if (block.type !== 'tool_result') return
   closeBlockingSubagent(win, key, conn, block)
+  if (typeof block.tool_use_id === 'string' && conn.sends.delete(block.tool_use_id)) {
+    const agentId = resumedAgentId(resultText(block.content))
+    if (agentId) resumeSubagent(win, key, conn, block.tool_use_id, agentId)
+  }
   if (!Array.isArray(block.content)) return
   for (const part of block.content as Array<Record<string, unknown>>) {
     if (part.type !== 'image') continue
@@ -2016,6 +2112,7 @@ function cliSessionJsonl(worktreePath: string, sessionId: string): string {
 }
 
 function stopTaskWatcher(conn: Conn): void {
+  stopAgentTails(conn)
   if (!conn.taskWatcher) return
   try {
     conn.taskWatcher.close()
@@ -2101,9 +2198,10 @@ export function handleTaskLine(win: BrowserWindow, key: string, conn: Conn, line
   if (!line.includes('<task-notification>')) return
   let closed = false
   for (const notice of parseTaskNotifications(taskLineText(line))) {
-    const id = notice.toolUseId
-    if (!conn.subagents.has(id)) continue
+    const id = noticeRowId(conn, notice)
+    if (!id) continue
     conn.subagents.delete(id)
+    stopAgentTail(conn, id)
     closed = true
     log('subagent-done', { key, id, via: 'transcript', outstanding: conn.subagents.size })
     if (notice.result) pushTranscript(conn, `agent: ${notice.result}`)
