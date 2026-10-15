@@ -946,6 +946,24 @@ test('ensureContainerUp renames a worktree provisioned under the branch-only nam
   assert.equal(lines().some((l) => l.endsWith("'down'")), false)
 })
 
+// A worktree made by an older Floe gets what changed since — here, Reverb lines
+// it never had — without being renamed or taken down.
+test('ensureContainerUp rewrites the generated files of a worktree it does not rename', async () => {
+  reset()
+  const reverb = { ...LARAVEL, 'composer.json': '{"require":{"laravel/reverb":"^1.6"}}\n' }
+  const root = checkout('floe-root-', reverb)
+  const wt = checkout('floe-wt-', { ...reverb, '.env': 'REVERB_PORT=8080\n' })
+  containerProject(root, 'mysql')
+  const slug = worktreeSlug(basename(root), 'feat/one')
+  write(wt, { '.floe/docker-compose.yml': `name: floe-${slug}\nservices: {}\n` })
+
+  await ensureContainerUp(root, wt, 'feat/one')
+
+  assert.equal(lines().some((l) => l.endsWith("'down'")), false)
+  assert.match(readFileSync(join(wt, '.floe', 'docker-compose.yml'), 'utf8'), /:6001"/)
+  assert.match(readFileSync(join(wt, '.env'), 'utf8'), /^REVERB_PORT=6001$/m)
+})
+
 // ── the check step, on the server ────────────────────────────────────────────
 
 async function onServer<T>(fn: () => Promise<T>): Promise<T> {
@@ -999,6 +1017,42 @@ test('the check step fails with the firewall fix when the container cannot reach
   assert.equal(status(events, 'verify'), 'failed')
   assert.match(detail(events, 'verify') ?? '', /sudo ufw allow proto tcp to 172\.21\.0\.1 port 443/)
   assert.equal(finished(events), false)
+})
+
+// Reverb serves on 6001 in the container (8080 is nginx). PHP broadcasts over
+// loopback; the browser gets the ws host through Caddy.
+test('a Reverb project gets its server port, a ws host and a route to it', async () => {
+  reset()
+  globalThis.__provSpawnPlan = (_cmd, args) => ((args.at(-1) ?? '').includes("'curl'") ? { stdout: 'status=200' } : { code: 0 })
+  const reverb = { ...LARAVEL, 'composer.json': '{"require":{"laravel/reverb":"^1.6"}}\n' }
+  const root = checkout('floe-root-', { ...reverb, '.env': 'REVERB_PORT=8080\nVITE_REVERB_HOST="${REVERB_HOST}"\n' })
+  const wt = checkout('floe-wt-', reverb)
+  containerProject(root, 'mysql')
+  const slug = worktreeSlug(basename(root), 'feat/one')
+
+  await onServer(() => provision(root, wt))
+
+  const env = readFileSync(join(wt, '.env'), 'utf8')
+  assert.match(env, /^REVERB_SERVER_PORT=6001$/m)
+  assert.match(env, /^REVERB_HOST=127\.0\.0\.1$/m)
+  assert.match(env, /^REVERB_PORT=6001$/m)
+  assert.match(env, new RegExp(`^VITE_REVERB_HOST=${slug}-ws\\.dev\\.test\\.example$`, 'm'))
+  assert.match(env, /^VITE_REVERB_PORT=443$/m)
+  assert.ok(existsSync(join(HOME, '.config', 'caddy', 'sites', `${slug}-ws.dev.test.example.caddy`)))
+})
+
+test('a project without Reverb gets no ws route and no Reverb lines', async () => {
+  reset()
+  globalThis.__provSpawnPlan = (_cmd, args) => ((args.at(-1) ?? '').includes("'curl'") ? { stdout: 'status=200' } : { code: 0 })
+  const root = checkout('floe-root-', { ...LARAVEL, '.env': 'DB_CONNECTION=mysql\n' })
+  const wt = checkout('floe-wt-', LARAVEL)
+  containerProject(root, 'mysql')
+  const slug = worktreeSlug(basename(root), 'feat/one')
+
+  await onServer(() => provision(root, wt))
+
+  assert.doesNotMatch(readFileSync(join(wt, '.env'), 'utf8'), /REVERB/)
+  assert.equal(existsSync(join(HOME, '.config', 'caddy', 'sites', `${slug}-ws.dev.test.example.caddy`)), false)
 })
 
 test('the check step reports a broken app instead of passing it', async () => {
@@ -1264,7 +1318,8 @@ test('teardown recovers both hosts from the compose project name', () => {
   writeFileSync(path, 'name: floe-feature-login\nservices:\n  app: {}\n')
   assert.deepEqual(teardownRouteHosts(path, CFG), [
     'feature-login.dev.test.example',
-    'feature-login-vite.dev.test.example'
+    'feature-login-vite.dev.test.example',
+    'feature-login-ws.dev.test.example'
   ])
 })
 
@@ -1274,7 +1329,7 @@ test('teardown does not depend on the worktree .env', () => {
   const dir = tmp('floe-teardown-')
   const path = join(dir, 'docker-compose.yml')
   writeFileSync(path, 'name: floe-x\n')
-  assert.deepEqual(teardownRouteHosts(path, CFG), ['x.dev.test.example', 'x-vite.dev.test.example'])
+  assert.deepEqual(teardownRouteHosts(path, CFG), ['x.dev.test.example', 'x-vite.dev.test.example', 'x-ws.dev.test.example'])
 })
 
 // Naming nothing is the only safe answer when the slug cannot be read: a guessed

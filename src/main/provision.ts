@@ -23,16 +23,20 @@ import { startCommand, userShell } from './commandRunner'
 import { getProjectEnv } from './projects'
 import {
   appHost,
+  CONTAINER_REVERB_PORT,
   type SupportConfig,
   MYSQL_CONTAINER,
   POSTGRES_CONTAINER,
   readSupportConfig,
+  usesReverb,
   viteHost,
   worktreeComposePath,
   worktreePort,
+  worktreeReverbPort,
   worktreeSlug,
   worktreeVitePort,
-  writeWorktreeCompose
+  writeWorktreeCompose,
+  wsHost
 } from './compose'
 
 // Provisioning makes a freshly created worktree ready to work: it runs the
@@ -455,8 +459,9 @@ function globalComposerAuth(): string | null {
 
 // The .env lines that follow the worktree's name. Shared by provisioning and by
 // the rename on reopen (ensureContainerUp), so both write the same values.
-function routedEnvVars(s: string, cfg: SupportConfig): Record<string, string> {
+function routedEnvVars(s: string, cfg: SupportConfig, worktreePath: string): Record<string, string> {
   return {
+    ...(usesReverb(worktreePath) ? reverbEnvVars(s, cfg) : {}),
     APP_URL: `https://${appHost(s, cfg)}`,
     // Shared Redis: one instance for all worktrees, isolated by a per-worktree
     // key prefix (Redis' 16-DB ceiling doesn't scale; a prefix does). Sessions,
@@ -468,6 +473,32 @@ function routedEnvVars(s: string, cfg: SupportConfig): Record<string, string> {
     // no round trip through Caddy.
     INERTIA_SSR_HOT_URL: 'http://127.0.0.1:5173'
   }
+}
+
+// Reverb serves on its own port in the container. PHP broadcasts to it over
+// loopback; the browser reaches it through Caddy at the ws host, over wss. The
+// VITE_ lines are written out rather than left as `${REVERB_HOST}`, because the
+// two sides no longer share one address.
+function reverbEnvVars(s: string, cfg: SupportConfig): Record<string, string> {
+  return {
+    REVERB_SERVER_HOST: '0.0.0.0',
+    REVERB_SERVER_PORT: String(CONTAINER_REVERB_PORT),
+    REVERB_HOST: '127.0.0.1',
+    REVERB_PORT: String(CONTAINER_REVERB_PORT),
+    REVERB_SCHEME: 'http',
+    VITE_REVERB_HOST: wsHost(s, cfg),
+    VITE_REVERB_PORT: '443',
+    VITE_REVERB_SCHEME: 'https'
+  }
+}
+
+// The worktree's Caddy routes: the app, Vite, and Reverb when the project runs it.
+function worktreeRoutes(s: string, cfg: SupportConfig, worktreePath: string): Array<{ what: string; host: string; port: number }> {
+  return [
+    { what: 'App', host: appHost(s, cfg), port: worktreePort(s) },
+    { what: 'Vite', host: viteHost(s, cfg), port: worktreeVitePort(s) },
+    ...(usesReverb(worktreePath) ? [{ what: 'Reverb', host: wsHost(s, cfg), port: worktreeReverbPort(s) }] : [])
+  ]
 }
 
 const containerSlug = (ctx: Ctx): string => worktreeSlug(ctx.projectName, ctx.branch)
@@ -491,7 +522,7 @@ const containerEnvVarsStep: StepDef = {
     const isPg = env.db === 'postgres'
     const updated = setEnvVars(readFileSync(dst, 'utf8'), {
       APP_NAME: ctx.linkName,
-      ...routedEnvVars(s, cfg),
+      ...routedEnvVars(s, cfg, ctx.worktreePath),
       DB_CONNECTION: isPg ? 'pgsql' : 'mysql',
       DB_HOST: isPg ? 'postgres' : 'mysql',
       DB_PORT: isPg ? '5432' : '3306',
@@ -525,12 +556,9 @@ const composeUpStep: StepDef = {
     // Routed on the server, loopback-only on a desktop (see ./caddy.ts) — the app
     // container is published either way, so container mode still works with no
     // Caddy anywhere on the machine.
-    const host = appHost(s, cfg)
-    const routed = await writeWorktreeRoute(host, worktreePort(s))
-    log(served('App', host, worktreePort(s), routed))
-    // Second route for the containerized vite dev server (HMR over wss).
-    const vHost = viteHost(s, cfg)
-    log(served('Vite', vHost, worktreeVitePort(s), await writeWorktreeRoute(vHost, worktreeVitePort(s))))
+    for (const r of worktreeRoutes(s, cfg, ctx.worktreePath)) {
+      log(served(r.what, r.host, r.port, await writeWorktreeRoute(r.host, r.port)))
+    }
     return 'done'
   }
 }
@@ -816,7 +844,7 @@ const nodeRecipe: StepDef[] = [copyEnvStep, nodeInstallStep, electronRepairStep,
 
 // Container teardown: `docker compose down` the app, then drop its database on
 // the shared DB container. The generated .env carries the engine + db name.
-// The app + vite hosts a worktree published, recovered from its generated compose
+// The app, vite and ws hosts a worktree published, recovered from its generated compose
 // file (`name: floe-<slug>`). Returns nothing when the file is unreadable or does
 // not carry the project name — there is then no way to name the routes, and
 // guessing one would risk deleting another worktree's.
@@ -827,7 +855,9 @@ export function teardownRouteHosts(composePath: string, cfg: SupportConfig): str
   } catch {
     return []
   }
-  return slug ? [appHost(slug, cfg), viteHost(slug, cfg)] : []
+  // The ws host is named whether or not the project ran Reverb: removing a route
+  // that was never written is a no-op.
+  return slug ? [appHost(slug, cfg), viteHost(slug, cfg), wsHost(slug, cfg)] : []
 }
 
 async function dropContainerWorktree(
@@ -972,12 +1002,16 @@ export async function dropWorktreeDatabase(
   return 'dropped'
 }
 
+// Bring a reopened worktree's generated files up to date with this Floe: the
+// compose file, the vite wrapper and the .env's routed lines are rewritten every
+// time, so a worktree made by an older Floe picks up whatever changed since.
+// `up -d` then recreates the container only when its config actually differs.
+//
 // A worktree provisioned before names carried the project (`floe-<branch>`) is
-// moved to its current name on reopen: the old container and routes go, the
-// generated files and the .env's routed lines are rewritten. The database name
-// already carried the project, so it stays. A compose file with no name is left
-// alone, since there is nothing to compare.
-async function renameContainerWorktree(
+// also moved to its current name first: the old container and routes go. The
+// database name already carried the project, so it stays. A compose file with no
+// name is left alone, since it is not one Floe wrote.
+async function syncContainerWorktree(
   root: string,
   worktreePath: string,
   composePath: string,
@@ -986,14 +1020,16 @@ async function renameContainerWorktree(
   log: Log
 ): Promise<void> {
   const old = readFileSync(composePath, 'utf8').match(/^name: floe-(.+)$/m)?.[1].trim()
-  if (!old || old === s) return
-  log(`Renaming ${old} → ${s}`)
-  const hosts = teardownRouteHosts(composePath, cfg)
-  await runShell('docker', ['compose', '-f', composePath, 'down'], worktreePath, log)
-  for (const h of hosts) if (await removeWorktreeRoute(h)) log(`Removed route ${h}`)
+  if (!old) return
+  if (old !== s) {
+    log(`Renaming ${old} → ${s}`)
+    const hosts = teardownRouteHosts(composePath, cfg)
+    await runShell('docker', ['compose', '-f', composePath, 'down'], worktreePath, log)
+    for (const h of hosts) if (await removeWorktreeRoute(h)) log(`Removed route ${h}`)
+  }
   writeWorktreeCompose(s, worktreePath, getProjectEnv(root) ?? defaultContainerEnv(worktreePath))
   const dotenv = join(worktreePath, '.env')
-  if (existsSync(dotenv)) writeFileSync(dotenv, setEnvVars(readFileSync(dotenv, 'utf8'), routedEnvVars(s, cfg)))
+  if (existsSync(dotenv)) writeFileSync(dotenv, setEnvVars(readFileSync(dotenv, 'utf8'), routedEnvVars(s, cfg, worktreePath)))
 }
 
 // Bring a container-mode worktree's app back up when it's opened (the container
@@ -1014,11 +1050,10 @@ export async function ensureContainerUp(
   const s = worktreeSlug(basename(root), branch)
   const log: Log = (t) => console.log(`[ensureContainerUp ${s}]`, t.trimEnd())
   const cfg = readSupportConfig()
-  await renameContainerWorktree(root, worktreePath, composePath, s, cfg, log)
+  await syncContainerWorktree(root, worktreePath, composePath, s, cfg, log)
   await runShell('docker', ['compose', '-f', composePath, 'up', '-d'], worktreePath, log)
   // Route reconcile, server-only — both writes are no-ops on a desktop.
-  await writeWorktreeRoute(appHost(s, cfg), worktreePort(s))
-  await writeWorktreeRoute(viteHost(s, cfg), worktreeVitePort(s))
+  for (const r of worktreeRoutes(s, cfg, worktreePath)) await writeWorktreeRoute(r.host, r.port)
 }
 
 // Distributive Omit so each ProvisionEvent variant keeps its own fields.

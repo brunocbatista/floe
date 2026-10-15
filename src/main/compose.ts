@@ -103,6 +103,24 @@ export function worktreePort(slug: string): number {
 // host Caddy fronts it at `<slug>-vite.dev.<domain>` for HMR over wss.
 export const worktreeVitePort = (slug: string): number => worktreePort(slug) + 1000
 
+// Reverb's host port, in a third parallel window (44000). The host Caddy fronts it
+// at `<slug>-ws.dev.<domain>` for the browser's websocket.
+export const worktreeReverbPort = (slug: string): number => worktreePort(slug) + 2000
+
+// Reverb's port inside the container. The project's own default is 8080, which
+// is nginx's there.
+export const CONTAINER_REVERB_PORT = 6001
+
+// Whether the worktree runs Reverb: `laravel/reverb` in composer.json's require.
+export function usesReverb(worktreePath: string): boolean {
+  try {
+    const require = JSON.parse(readFileSync(join(worktreePath, 'composer.json'), 'utf8')).require ?? {}
+    return 'laravel/reverb' in require
+  } catch {
+    return false
+  }
+}
+
 // Compose project name / container names are derived from the slug and stable, so
 // teardown and `docker exec` can find them without a lookup.
 export const composeProject = (slug: string): string => `floe-${slug}`
@@ -136,6 +154,7 @@ export function findProjectViteConfig(worktreePath: string): string | null {
 
 export const appHost = (slug: string, cfg: SupportConfig): string => `${slug}.dev.${cfg.domain}`
 export const viteHost = (slug: string, cfg: SupportConfig): string => `${slug}-vite.dev.${cfg.domain}`
+export const wsHost = (slug: string, cfg: SupportConfig): string => `${slug}-ws.dev.${cfg.domain}`
 
 // TLS terminates at the host Caddy, which reaches the container over plain HTTP —
 // so nginx's `$https` is empty, PHP never receives `HTTPS=on`, and Laravel builds
@@ -213,6 +232,7 @@ export function worktreeComposeYaml(
 ): string {
   const port = worktreePort(slug)
   const vitePort = worktreeVitePort(slug)
+  const reverbPort = worktreeReverbPort(slug)
   // Remap the container user to whoever runs the server, so bind-mounted files stay
   // writable. `process.getuid` is undefined on Windows — default to 1000 (the box).
   const uid = process.getuid?.() ?? 1000
@@ -244,6 +264,7 @@ services:
 ${selfHosts(slug, cfg)}    ports:
       - "127.0.0.1:${port}:8080"     # host Caddy reverse-proxies here
       - "127.0.0.1:${vitePort}:5173" # vite dev server → Caddy at ${viteHost(slug, cfg)}
+      - "127.0.0.1:${reverbPort}:${CONTAINER_REVERB_PORT}" # reverb, when the project runs it → Caddy at ${wsHost(slug, cfg)}
     networks:
       - floe
 
