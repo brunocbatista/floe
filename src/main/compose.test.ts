@@ -11,14 +11,38 @@ import type { SupportConfig } from './compose.ts'
 const home = mkdtempSync(join(tmpdir(), 'floe-home-'))
 process.env.HOME = home
 
-const { readSupportConfig, worktreeDockerfile, worktreePort, worktreeViteConfig } = await import('./compose.ts')
+const { readSupportConfig, worktreeComposeYaml, worktreeDockerfile, worktreePort, worktreeSlug, worktreeViteConfig } =
+  await import('./compose.ts')
 
 const cfg: SupportConfig = {
   domain: 'pinguim.io',
   mysqlRootPassword: 'x',
   postgresPassword: 'x',
-  edgeBind: '127.0.0.1'
+  edgeBind: '127.0.0.1',
+  dockerBind: null
 }
+
+const php = { mode: 'container', runtime: 'laravel', php: '8.4', packageManager: 'npm', db: 'mysql' } as const
+
+test('worktreeSlug names the worktree after its project and branch', () => {
+  assert.equal(worktreeSlug('elevaris', 'inertiajs'), 'elevaris-inertiajs')
+  assert.equal(worktreeSlug('Elevaris', 'feat/Login_Page'), 'elevaris-feat-login-page')
+})
+
+test('worktreeSlug leaves room for the -vite label, and keeps long names distinct', () => {
+  const a = worktreeSlug('elevaris', `feat/${'x'.repeat(80)}-a`)
+  const b = worktreeSlug('elevaris', `feat/${'x'.repeat(80)}-b`)
+  assert.ok(`${a}-vite`.length <= 63, a)
+  assert.notEqual(a, b)
+  assert.match(a, /^[a-z0-9]+(-[a-z0-9]+)*$/)
+})
+
+test('compose points the app at its own hosts through the floe gateway', () => {
+  const out = worktreeComposeYaml('elevaris-x', '/w', php, { ...cfg, dockerBind: '172.21.0.1' })
+  assert.match(out, /- "elevaris-x\.dev\.pinguim\.io:172\.21\.0\.1"/)
+  assert.match(out, /- "elevaris-x-vite\.dev\.pinguim\.io:172\.21\.0\.1"/)
+  assert.doesNotMatch(worktreeComposeYaml('elevaris-x', '/w', php, cfg), /extra_hosts/)
+})
 
 test('worktreePort is deterministic for a slug', () => {
   assert.equal(worktreePort('feature-x'), worktreePort('feature-x'))
@@ -81,6 +105,11 @@ test('vite wrapper overrides the project server block rather than being overridd
   assert.match(out, /server: \{ \.\.\.resolved\?\.server, \.\.\.server \}/)
 })
 
+test('vite wrapper turns off a project https setting, since Caddy terminates TLS', () => {
+  const out = worktreeViteConfig('feat-x', 'https://feat-x.dev.pinguim.io', cfg, 'vite.config.js')
+  assert.match(out, /https: false/)
+})
+
 // Runs before the file below is written: no support.env is the normal state on a
 // dev machine that has never run the "Support stack: bring up" command.
 test('readSupportConfig falls back to the shipped defaults when support.env is absent', () => {
@@ -88,7 +117,8 @@ test('readSupportConfig falls back to the shipped defaults when support.env is a
     domain: 'pinguim.io',
     mysqlRootPassword: 'floe',
     postgresPassword: 'floe',
-    edgeBind: '100.105.189.56'
+    edgeBind: '100.105.189.56',
+    dockerBind: null
   })
 })
 
@@ -102,6 +132,7 @@ test('readSupportConfig reads support.env, unquoting and ignoring non-assignment
       'MYSQL_ROOT_PASSWORD=s3cret  ',
       "POSTGRES_PASSWORD='pg-pass'",
       'EDGE_BIND=100.64.0.1',
+      'DOCKER_BIND=172.30.0.1',
       'not an assignment at all',
       ''
     ].join('\n')
@@ -110,7 +141,8 @@ test('readSupportConfig reads support.env, unquoting and ignoring non-assignment
     domain: 'example.test',
     mysqlRootPassword: 's3cret',
     postgresPassword: 'pg-pass',
-    edgeBind: '100.64.0.1'
+    edgeBind: '100.64.0.1',
+    dockerBind: '172.30.0.1'
   })
 })
 

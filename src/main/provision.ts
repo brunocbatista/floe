@@ -15,7 +15,7 @@ import {
   writePremise,
   type PremiseAnswer
 } from './premise'
-import { removeWorktreeRoute, writeWorktreeRoute } from './caddy'
+import { edgeIsOurs, removeWorktreeRoute, writeWorktreeRoute } from './caddy'
 import { bwrapPresent, sandboxDisabled, sandboxedSpawn } from './sandbox'
 import { beginProvision, trackChild } from './provisionRuns'
 import { isLaravel, listCommands } from './commands'
@@ -30,6 +30,7 @@ import {
   viteHost,
   worktreeComposePath,
   worktreePort,
+  worktreeSlug,
   worktreeVitePort,
   writeWorktreeCompose
 } from './compose'
@@ -452,6 +453,25 @@ function globalComposerAuth(): string | null {
   }
 }
 
+// The .env lines that follow the worktree's name. Shared by provisioning and by
+// the rename on reopen (ensureContainerUp), so both write the same values.
+function routedEnvVars(s: string, cfg: SupportConfig): Record<string, string> {
+  return {
+    APP_URL: `https://${appHost(s, cfg)}`,
+    // Shared Redis: one instance for all worktrees, isolated by a per-worktree
+    // key prefix (Redis' 16-DB ceiling doesn't scale; a prefix does). Sessions,
+    // cache and queues all inherit it.
+    REDIS_PREFIX: `${s}_`,
+    CACHE_PREFIX: `${s}_`,
+    // Inertia v3 posts dev SSR to the url in public/hot, which is the browser's
+    // Caddy host. PHP and Vite share the container, so loopback reaches it with
+    // no round trip through Caddy.
+    INERTIA_SSR_HOT_URL: 'http://127.0.0.1:5173'
+  }
+}
+
+const containerSlug = (ctx: Ctx): string => worktreeSlug(ctx.projectName, ctx.branch)
+
 // Point the app at the shared DBs by service name (mysql/postgres) and at its
 // Caddy-routed URL. The app connects as the DB root user over the private
 // `floe` network — the control plane creates the DB separately.
@@ -466,25 +486,20 @@ const containerEnvVarsStep: StepDef = {
     }
     const cfg = readSupportConfig()
     const env = ctx.env as ProjectEnvConfig
-    const s = slug(ctx.branch)
+    const s = containerSlug(ctx)
     const db = ctx.linkName.replace(/[^A-Za-z0-9_]/g, '_')
     const isPg = env.db === 'postgres'
     const updated = setEnvVars(readFileSync(dst, 'utf8'), {
       APP_NAME: ctx.linkName,
-      APP_URL: `https://${appHost(s, cfg)}`,
+      ...routedEnvVars(s, cfg),
       DB_CONNECTION: isPg ? 'pgsql' : 'mysql',
       DB_HOST: isPg ? 'postgres' : 'mysql',
       DB_PORT: isPg ? '5432' : '3306',
       DB_DATABASE: db,
       DB_USERNAME: isPg ? 'postgres' : 'root',
       DB_PASSWORD: isPg ? cfg.postgresPassword : cfg.mysqlRootPassword,
-      // Shared Redis: one instance for all worktrees, isolated by a per-worktree
-      // key prefix (Redis' 16-DB ceiling doesn't scale; a prefix does). Sessions,
-      // cache and queues all inherit it.
       REDIS_HOST: 'redis',
-      REDIS_PORT: '6379',
-      REDIS_PREFIX: `${s}_`,
-      CACHE_PREFIX: `${s}_`
+      REDIS_PORT: '6379'
     })
     writeFileSync(dst, updated)
     log(`APP_URL=https://${appHost(s, cfg)}\nDB_HOST=${isPg ? 'postgres' : 'mysql'} DB_DATABASE=${db}\nREDIS_HOST=redis REDIS_PREFIX=${s}_`)
@@ -502,7 +517,7 @@ const composeUpStep: StepDef = {
   label: 'Start app container',
   run: async (ctx, log) => {
     const cfg = readSupportConfig()
-    const s = slug(ctx.branch)
+    const s = containerSlug(ctx)
     const path = writeWorktreeCompose(s, ctx.worktreePath, ctx.env as ProjectEnvConfig)
     log(`Wrote ${path}`)
     // --build so the Node+bun layer on top of serversideup is (re)built as needed.
@@ -611,6 +626,78 @@ const seedContainerStep: StepDef = {
   }
 }
 
+// One HTTP status, fetched by curl through the same shell as every other step.
+// A connection that fails outright still prints its `status=000`, but curl then
+// exits non-zero, so the rejection is dropped and the status read from the output.
+async function httpStatus(args: string[], cwd: string): Promise<number> {
+  let out = ''
+  try {
+    await runShell(args[0], args.slice(1), cwd, (t) => {
+      out += t
+    })
+  } catch {
+    // see above
+  }
+  return Number(out.match(/status=(\d{3})/)?.[1] ?? 0)
+}
+
+const curlStatus = (url: string): string[] => ['curl', '-s', '-o', '/dev/null', '-m', '10', '-w', 'status=%{http_code}', url]
+
+// A first request to a new host waits on Caddy's DNS-01 certificate (30-60s), so
+// the host-side probe retries before it calls the app unreachable.
+const VERIFY_TRIES = 40
+const VERIFY_DELAY_MS = 3000
+
+// Provisioning used to report green once the container started, and a broken
+// app was found in the browser. This step asks the app itself, the three ways it
+// gets reached on the server: the browser through Caddy, Vite through Caddy, and
+// the app's own server-side calls to APP_URL from inside the container.
+const verifyStep: StepDef = {
+  id: 'verify',
+  label: 'Check the app answers',
+  run: async (ctx, log) => {
+    if (!edgeIsOurs()) {
+      log('Checked on the server only — this machine routes nothing')
+      return 'skipped'
+    }
+    const cfg = readSupportConfig()
+    const s = containerSlug(ctx)
+    const app = `https://${appHost(s, cfg)}/`
+    let code = 0
+    for (let i = 0; i < VERIFY_TRIES; i++) {
+      code = await httpStatus(curlStatus(app), ctx.worktreePath)
+      if (code) break
+      await new Promise((r) => setTimeout(r, VERIFY_DELAY_MS))
+    }
+    if (!code) throw new Error(`${app} did not answer (no TLS certificate yet, or Caddy has no route)`)
+    if (code >= 500) throw new Error(`${app} answered ${code} — see storage/logs/laravel.log`)
+    log(`App: ${app} → ${code}`)
+
+    // Vite runs as a project command, which may not have started yet. The
+    // published port accepts a connection either way, so only a real HTTP status
+    // means Vite is up.
+    if (await httpStatus(curlStatus(`http://127.0.0.1:${worktreeVitePort(s)}/@vite/client`), ctx.worktreePath)) {
+      const vite = `https://${viteHost(s, cfg)}/@vite/client`
+      const viteCode = await httpStatus(curlStatus(vite), ctx.worktreePath)
+      if (viteCode !== 200) throw new Error(`Vite runs, but ${vite} answered ${viteCode || 'nothing'} through Caddy`)
+      log(`Vite: ${vite} → 200`)
+    } else {
+      log('Vite is not running yet — not checked')
+    }
+
+    const inner = await httpStatus(['docker', ...composeExec(ctx.worktreePath, curlStatus(app))], ctx.worktreePath)
+    if (!inner) {
+      throw new Error(
+        cfg.dockerBind
+          ? `The app container cannot reach ${app}. The host firewall drops container traffic; allow it once: sudo ufw allow proto tcp to ${cfg.dockerBind} port 443`
+          : `The app container cannot reach ${app}: no \`floe\` docker network found to route it through`
+      )
+    }
+    log(`From the container: ${app} → ${inner}`)
+    return 'done'
+  }
+}
+
 // serversideup app container serves PHP; JS/Vite deps still install on the host
 // (node lives there, and `vite` dev runs host-side). ponytail: queue/scheduler
 // workers in-container are phase 2.1 — add when a project needs them.
@@ -623,7 +710,8 @@ const laravelContainerRecipe: StepDef[] = [
   createDbStep,
   migrateContainerStep,
   seedContainerStep,
-  nodeInstallContainerStep
+  nodeInstallContainerStep,
+  verifyStep
 ]
 
 const laravelRecipe: StepDef[] = [
@@ -884,6 +972,30 @@ export async function dropWorktreeDatabase(
   return 'dropped'
 }
 
+// A worktree provisioned before names carried the project (`floe-<branch>`) is
+// moved to its current name on reopen: the old container and routes go, the
+// generated files and the .env's routed lines are rewritten. The database name
+// already carried the project, so it stays. A compose file with no name is left
+// alone, since there is nothing to compare.
+async function renameContainerWorktree(
+  root: string,
+  worktreePath: string,
+  composePath: string,
+  s: string,
+  cfg: SupportConfig,
+  log: Log
+): Promise<void> {
+  const old = readFileSync(composePath, 'utf8').match(/^name: floe-(.+)$/m)?.[1].trim()
+  if (!old || old === s) return
+  log(`Renaming ${old} → ${s}`)
+  const hosts = teardownRouteHosts(composePath, cfg)
+  await runShell('docker', ['compose', '-f', composePath, 'down'], worktreePath, log)
+  for (const h of hosts) if (await removeWorktreeRoute(h)) log(`Removed route ${h}`)
+  writeWorktreeCompose(s, worktreePath, getProjectEnv(root) ?? defaultContainerEnv(worktreePath))
+  const dotenv = join(worktreePath, '.env')
+  if (existsSync(dotenv)) writeFileSync(dotenv, setEnvVars(readFileSync(dotenv, 'utf8'), routedEnvVars(s, cfg)))
+}
+
 // Bring a container-mode worktree's app back up when it's opened (the container
 // only gets created during provisioning on create; reopening after a reboot or a
 // `compose down` would otherwise leave nothing serving). Idempotent: `up -d` and
@@ -899,11 +1011,12 @@ export async function ensureContainerUp(
   if (getProjectEnv(root)?.mode !== 'container' && process.env.FLOE_IS_SERVER !== '1') return
   const composePath = worktreeComposePath(worktreePath)
   if (!existsSync(composePath)) return // never provisioned as a container — nothing to ensure
-  const s = slug(branch)
+  const s = worktreeSlug(basename(root), branch)
   const log: Log = (t) => console.log(`[ensureContainerUp ${s}]`, t.trimEnd())
+  const cfg = readSupportConfig()
+  await renameContainerWorktree(root, worktreePath, composePath, s, cfg, log)
   await runShell('docker', ['compose', '-f', composePath, 'up', '-d'], worktreePath, log)
   // Route reconcile, server-only — both writes are no-ops on a desktop.
-  const cfg = readSupportConfig()
   await writeWorktreeRoute(appHost(s, cfg), worktreePort(s))
   await writeWorktreeRoute(viteHost(s, cfg), worktreeVitePort(s))
 }

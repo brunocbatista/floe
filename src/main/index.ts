@@ -295,6 +295,7 @@ import {
   unlinkWorktreeSite,
   ensureContainerUp
 } from './provision'
+import { edgeIsOurs } from './caddy'
 import { supportStack } from './support'
 import type { AgentRunOptions, DrawDelta, DrawScope, Effort, FileAttachment, FileOp, ImageAttachment, McpCommandResult, PermissionMode, ProjectEnvConfig, ThreadComment, Worktree } from '../shared/types'
 
@@ -570,6 +571,27 @@ export async function worktreeStatuses(paths: string[]): Promise<Record<string, 
 }
 
 export { stopWorktreeProcesses }
+
+// On the server, every container worktree is brought up under its current name
+// when the daemon starts — the rename and route reconcile in ensureContainerUp.
+// Nothing else calls it: the renderer never asks on reopen. One at a time,
+// since each one reloads Caddy.
+async function reconcileContainerWorktrees(): Promise<void> {
+  for (const project of listProjects()) {
+    let worktrees: Worktree[]
+    try {
+      worktrees = await listWorktrees(project.path)
+    } catch {
+      continue
+    }
+    for (const wt of worktrees) {
+      if (wt.isMain) continue
+      await ensureContainerUp(project.path, wt.path, wt.branch).catch((e) =>
+        console.error('[provision:reconcile]', wt.path, errorText(e))
+      )
+    }
+  }
+}
 
 // Undo the `herd link` the Laravel recipe made. Runs while the directory is
 // still there — `herd unlink` reads the site from the cwd it is called in.
@@ -2023,7 +2045,9 @@ void app.whenReady().then(async () => {
   createWindow()
   // Keep an installed `floe` command pointing at this build — an update moves
   // the binary the shim execs. No-op when the command was never installed.
-  refreshCli(cliPaths())
+  // Not on the server: the daemon has no resources dir, so cliPaths() threw and
+  // every boot step below was skipped, and its `floe` is the container router.
+  if (!edgeIsOurs()) refreshCli(cliPaths())
   // Background auto-update: polls the GitHub release feed, installs on next quit.
   initAutoUpdate(() => localWindow ?? BrowserWindow.getAllWindows()[0])
   // Watchdog: log any turn that gets stuck "Thinking…" (never emits done) so a
@@ -2034,6 +2058,7 @@ void app.whenReady().then(async () => {
   // runs it again — see reconcileColony.
   const colonyWin = localWindow ?? BrowserWindow.getAllWindows()[0]
   if (colonyWin) reconcileColony(colonyWin)
+  if (edgeIsOurs()) void reconcileContainerWorktrees()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

@@ -170,6 +170,7 @@ const {
   unlinkWorktreeSite
 } = await import('./provision.ts')
 const { invalidateFloeConfig } = await import('./config/floe.ts')
+const { worktreeSlug } = await import('./compose.ts')
 const store = await import('./config/projectStore.ts')
 
 function reset(): void {
@@ -795,7 +796,7 @@ test('the container recipe points .env at the shared services and brings the app
   const wt = checkout('floe-wt-', LARAVEL)
   containerProject(root, 'mysql')
   const db = dbNameFor(root, 'feat/one')
-  const slug = 'feat-one' // the container host is keyed by the branch alone
+  const slug = worktreeSlug(basename(root), 'feat/one') // `<project>-<branch>`
 
   const events = await provision(root, wt)
 
@@ -808,8 +809,10 @@ test('the container recipe points .env at the shared services and brings the app
     'create-db',
     'migrate',
     'seed',
-    'node-install'
+    'node-install',
+    'verify'
   ])
+  assert.equal(status(events, 'verify'), 'skipped') // nothing is routed off the server
   const env = readFileSync(join(wt, '.env'), 'utf8')
   assert.match(env, new RegExp(`^APP_URL=https://${slug}\\.dev\\.test\\.example$`, 'm'))
   assert.match(env, /^DB_CONNECTION=mysql$/m)
@@ -821,6 +824,7 @@ test('the container recipe points .env at the shared services and brings the app
   assert.match(env, /^REDIS_HOST=redis$/m)
   assert.match(env, new RegExp(`^REDIS_PREFIX=${slug}_$`, 'm'))
   assert.match(env, new RegExp(`^CACHE_PREFIX=${slug}_$`, 'm'))
+  assert.match(env, /^INERTIA_SSR_HOT_URL=http:\/\/127\.0\.0\.1:5173$/m)
 
   const compose = join(wt, '.floe', 'docker-compose.yml')
   assert.ok(existsSync(compose))
@@ -912,6 +916,102 @@ test('ensureContainerUp brings a container worktree back, and leaves host ones a
   write(wt, { '.floe/docker-compose.yml': 'services: {}\n' })
   await ensureContainerUp(root, wt, 'feat/one')
   assert.equal(line("'up' '-d'"), `'docker' 'compose' '-f' '${compose}' 'up' '-d'`)
+})
+
+// A worktree from before names carried the project: reopening moves it to
+// `<project>-<branch>`, taking the old container and routes down first.
+test('ensureContainerUp renames a worktree provisioned under the branch-only name', async () => {
+  reset()
+  const root = checkout('floe-root-', LARAVEL)
+  const wt = checkout('floe-wt-', { ...LARAVEL, '.env': 'APP_URL=https://feat-one.dev.test.example\nREDIS_PREFIX=feat-one_\n' })
+  containerProject(root, 'mysql')
+  const compose = join(wt, '.floe', 'docker-compose.yml')
+  write(wt, { '.floe/docker-compose.yml': 'name: floe-feat-one\nservices: {}\n' })
+  const slug = worktreeSlug(basename(root), 'feat/one')
+
+  await ensureContainerUp(root, wt, 'feat/one')
+
+  const order = lines()
+  const down = order.findIndex((l) => l.endsWith("'down'"))
+  const up = order.findIndex((l) => l.endsWith("'up' '-d'"))
+  assert.ok(down >= 0 && down < up, 'the old project must go down before the new one comes up')
+  assert.match(readFileSync(compose, 'utf8'), new RegExp(`^name: floe-${slug}$`, 'm'))
+  const env = readFileSync(join(wt, '.env'), 'utf8')
+  assert.match(env, new RegExp(`^APP_URL=https://${slug}\\.dev\\.test\\.example$`, 'm'))
+  assert.match(env, new RegExp(`^REDIS_PREFIX=${slug}_$`, 'm'))
+
+  // Already renamed: a second reopen only brings it up.
+  reset()
+  await ensureContainerUp(root, wt, 'feat/one')
+  assert.equal(lines().some((l) => l.endsWith("'down'")), false)
+})
+
+// ── the check step, on the server ────────────────────────────────────────────
+
+async function onServer<T>(fn: () => Promise<T>): Promise<T> {
+  const env = join(HOME, '.floe', 'support.env')
+  const before = readFileSync(env, 'utf8')
+  writeFileSync(env, before + 'DOCKER_BIND=172.21.0.1\n')
+  process.env.FLOE_IS_SERVER = '1'
+  try {
+    return await fn()
+  } finally {
+    delete process.env.FLOE_IS_SERVER
+    writeFileSync(env, before)
+  }
+}
+
+test('the check step passes when the app answers through Caddy and from its container', async () => {
+  reset()
+  globalThis.__provSpawnPlan = (_cmd, args) => {
+    const l = args.at(-1) ?? ''
+    if (l.includes('@vite/client')) return { code: 7, stdout: 'status=000' } // Vite not started
+    if (l.includes("'curl'")) return { stdout: 'status=302' }
+    return { code: 0 }
+  }
+  const root = checkout('floe-root-', { ...LARAVEL, '.env': 'DB_CONNECTION=mysql\n' })
+  const wt = checkout('floe-wt-', LARAVEL)
+  containerProject(root, 'mysql')
+
+  const events = await onServer(() => provision(root, wt))
+
+  assert.equal(status(events, 'verify'), 'done', detail(events, 'verify'))
+  assert.match(logOf(events, 'verify'), /Vite is not running yet/)
+  assert.ok(line("'exec' '-T' 'app' 'curl'"), 'the container itself must be asked')
+  assert.match(readFileSync(join(wt, '.floe', 'docker-compose.yml'), 'utf8'), /extra_hosts:/)
+})
+
+test('the check step fails with the firewall fix when the container cannot reach its own host', async () => {
+  reset()
+  globalThis.__provSpawnPlan = (_cmd, args) => {
+    const l = args.at(-1) ?? ''
+    if (l.includes("'exec' '-T' 'app' 'curl'")) return { code: 28, stdout: 'status=000' }
+    if (l.includes('@vite/client')) return { code: 7, stdout: 'status=000' }
+    if (l.includes("'curl'")) return { stdout: 'status=200' }
+    return { code: 0 }
+  }
+  const root = checkout('floe-root-', { ...LARAVEL, '.env': 'DB_CONNECTION=mysql\n' })
+  const wt = checkout('floe-wt-', LARAVEL)
+  containerProject(root, 'mysql')
+
+  const events = await onServer(() => provision(root, wt))
+
+  assert.equal(status(events, 'verify'), 'failed')
+  assert.match(detail(events, 'verify') ?? '', /sudo ufw allow proto tcp to 172\.21\.0\.1 port 443/)
+  assert.equal(finished(events), false)
+})
+
+test('the check step reports a broken app instead of passing it', async () => {
+  reset()
+  globalThis.__provSpawnPlan = (_cmd, args) => ((args.at(-1) ?? '').includes("'curl'") ? { stdout: 'status=502' } : { code: 0 })
+  const root = checkout('floe-root-', { ...LARAVEL, '.env': 'DB_CONNECTION=mysql\n' })
+  const wt = checkout('floe-wt-', LARAVEL)
+  containerProject(root, 'mysql')
+
+  const events = await onServer(() => provision(root, wt))
+
+  assert.equal(status(events, 'verify'), 'failed')
+  assert.match(detail(events, 'verify') ?? '', /answered 502/)
 })
 
 // ── retry, skip and resume ───────────────────────────────────────────────────
@@ -1156,7 +1256,7 @@ test('a constraint below everything we build still yields a buildable image', ()
 // worktree whose .env had been edited or deleted then left both route files
 // behind, and Caddy went on serving a dead upstream on a real hostname.
 
-const CFG = { domain: 'test.example', mysqlRootPassword: 'x', postgresPassword: 'x', edgeBind: '127.0.0.1' }
+const CFG = { domain: 'test.example', mysqlRootPassword: 'x', postgresPassword: 'x', edgeBind: '127.0.0.1', dockerBind: null }
 
 test('teardown recovers both hosts from the compose project name', () => {
   const dir = tmp('floe-teardown-')

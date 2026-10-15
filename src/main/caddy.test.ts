@@ -12,7 +12,7 @@ import { join } from 'node:path'
 const home = mkdtempSync(join(tmpdir(), 'floe-caddy-home-'))
 process.env.HOME = home
 mkdirSync(join(home, '.floe'), { recursive: true })
-writeFileSync(join(home, '.floe', 'support.env'), 'DOMAIN=test.example\nEDGE_BIND=100.64.0.1\n')
+writeFileSync(join(home, '.floe', 'support.env'), 'DOMAIN=test.example\nEDGE_BIND=100.64.0.1\nDOCKER_BIND=\n')
 
 register(
   'data:text/javascript,' +
@@ -57,11 +57,17 @@ const routeFile = (host: string): string => join(home, '.config', 'caddy', 'site
 // that omits the bind, or binds something else, makes Caddy fight itself for the
 // port and the whole reload fails — taking every other site down with it.
 test('a route binds the edge IP from support.env', () => {
-  assert.match(routeBlock('x.dev.test.example', 42123, '100.64.0.1'), /^\tbind 100\.64\.0\.1$/m)
+  assert.match(routeBlock('x.dev.test.example', 42123, ['100.64.0.1']), /^\tbind 100\.64\.0\.1$/m)
 })
 
 test('a route reverse-proxies to the loopback port the container publishes', () => {
-  assert.match(routeBlock('x.dev.test.example', 42123, '100.64.0.1'), /reverse_proxy 127\.0\.0\.1:42123/)
+  assert.match(routeBlock('x.dev.test.example', 42123, ['100.64.0.1']), /reverse_proxy 127\.0\.0\.1:42123/)
+})
+
+// The second address is the host on the `floe` docker network: the app's own
+// container reaches its hosts there, since it cannot reach the Tailscale IP.
+test('a route also binds the docker gateway when there is one', () => {
+  assert.match(routeBlock('x.dev.test.example', 42123, ['100.64.0.1', '172.21.0.1']), /^\tbind 100\.64\.0\.1 172\.21\.0\.1$/m)
 })
 
 test('writing a route creates the sites file and reloads Caddy', async () => {

@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -29,6 +30,12 @@ export interface SupportConfig {
   // route files must bind the same IP as the main site, or Caddy fights itself
   // over :443. Overridable via EDGE_BIND in support.env.
   edgeBind: string
+  // The host's own address on the shared `floe` docker network. Worktree routes
+  // also bind it, and each app container resolves its own hosts to it, so a
+  // server-side call to APP_URL reaches Caddy instead of timing out on the
+  // Tailscale IP, which containers cannot reach. Null off the server.
+  // Overridable via DOCKER_BIND in support.env (empty turns it off).
+  dockerBind: string | null
 }
 
 function parseEnv(text: string): Record<string, string> {
@@ -46,8 +53,36 @@ export function readSupportConfig(): SupportConfig {
     domain: env.DOMAIN || 'pinguim.io',
     mysqlRootPassword: env.MYSQL_ROOT_PASSWORD || 'floe',
     postgresPassword: env.POSTGRES_PASSWORD || 'floe',
-    edgeBind: env.EDGE_BIND || '100.105.189.56'
+    edgeBind: env.EDGE_BIND || '100.105.189.56',
+    dockerBind: 'DOCKER_BIND' in env ? env.DOCKER_BIND || null : process.env.FLOE_IS_SERVER === '1' ? floeGateway() : null
   }
+}
+
+// The `floe` network's gateway, read from docker. Only a hit is cached: the
+// support stack may create the network after the daemon has started.
+let gateway: string | null = null
+function floeGateway(): string | null {
+  if (gateway) return gateway
+  const r = spawnSync('docker', ['network', 'inspect', 'floe', '-f', '{{(index .IPAM.Config 0).Gateway}}'], {
+    encoding: 'utf8'
+  })
+  gateway = r.status === 0 ? r.stdout.trim() || null : null
+  return gateway
+}
+
+// One name per worktree, `<project>-<branch>`. Hosts, the compose project and
+// the ports all derive from it, so two projects with a branch of the same name
+// never claim each other's. DNS-safe, and short enough that `<slug>-vite` still
+// fits one 63-char label: a longer name keeps its head plus a hash of the whole.
+export function worktreeSlug(project: string, branch: string): string {
+  const s = `${project}-${branch}`
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  if (s.length <= 58) return s
+  let h = 0
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0
+  return `${s.slice(0, 51).replace(/-+$/, '')}-${h.toString(36).padStart(7, '0').slice(-6)}`
 }
 
 // A stable host port for a worktree's app container, derived from its slug. The
@@ -156,6 +191,16 @@ USER www-data
 `
 }
 
+// The app's own hosts, pointed at the host's address on the `floe` network
+// (see SupportConfig.dockerBind). Empty when there is none.
+function selfHosts(slug: string, cfg: SupportConfig): string {
+  if (!cfg.dockerBind) return ''
+  return `    extra_hosts:
+      - "${appHost(slug, cfg)}:${cfg.dockerBind}"
+      - "${viteHost(slug, cfg)}:${cfg.dockerBind}"
+`
+}
+
 // The generated Compose file for one worktree. Absolute volume path so the file's
 // own location doesn't matter; `external: true` network so it consumes the shared
 // `floe` net the support stack created; a loopback-published port so the host
@@ -196,7 +241,7 @@ services:
       # and point HMR/assets at the Caddy-fronted vite host (over 443/wss).
       VITE_HOST: "0.0.0.0"
       VITE_HMR_HOST: "${viteHost(slug, cfg)}"
-    ports:
+${selfHosts(slug, cfg)}    ports:
       - "127.0.0.1:${port}:8080"     # host Caddy reverse-proxies here
       - "127.0.0.1:${vitePort}:5173" # vite dev server → Caddy at ${viteHost(slug, cfg)}
     networks:
@@ -237,6 +282,10 @@ const server = {
   // Compose publishes exactly 5173; a project-chosen port would not be routed.
   port: 5173,
   strictPort: true,
+  // A project config that turns on \`https\` (the Herd shape: certs when present,
+  // \`true\` otherwise) would serve TLS here with no certificate, so every request
+  // from Caddy fails the handshake and comes back 502.
+  https: false,
   // Written verbatim into public/hot, so it has to be the browser-reachable proxy
   // rather than the bind address.
   origin: 'https://${vHost}',
