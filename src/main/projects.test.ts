@@ -1,6 +1,6 @@
 import { after, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { makeGitRepo, type GitFixture } from './gitFixture.test-helper.ts'
@@ -216,4 +216,24 @@ test('renameGroup refuses the default, a blank name, a no-op and an unknown grou
     assert.equal(groups.includes('Anything'), false)
     assert.equal(after.find((p) => p.path === '/code/one')?.group, 'Old')
   }
+})
+
+test('setProjectEnv: a host mode writes only mode and sweeps stale container keys', async () => {
+  reset()
+  const path = repo()
+  await projects.addProjectByPath(path)
+  const container = { mode: 'container', runtime: 'laravel', php: '8.3', packageManager: 'bun', db: 'postgres' } as const
+  projects.setProjectEnv(path, container)
+  assert.equal(projects.getProjectEnv(path)?.mode, 'container')
+
+  projects.setProjectEnv(path, { mode: 'valet' })
+  assert.deepEqual(projects.getProjectEnv(path), { mode: 'valet' })
+  const raw = readFileSync(join(path, '.floe', 'config.toml'), 'utf8')
+  assert.doesNotMatch(raw, /^(php|package-manager|db|db-admin|runtime)\s*=/m)
+
+  projects.setProjectEnv(path, container)
+  assert.equal((projects.getProjectEnv(path) as { php: string }).php, '8.3')
+
+  projects.setProjectEnv(path, null)
+  assert.equal(projects.getProjectEnv(path), undefined)
 })

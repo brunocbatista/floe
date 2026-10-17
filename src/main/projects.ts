@@ -77,21 +77,28 @@ export function getProjectEnv(path: string): ProjectEnvConfig | undefined {
   return stored(path)?.env as ProjectEnvConfig | undefined
 }
 
+// Every key a container [env] block holds. Switching to a host mode unsets the
+// ones it does not use, so the block never keeps stale container keys.
+const CONTAINER_KEYS = ['runtime', 'php', 'package-manager', 'db', 'db-admin']
+
 export function setProjectEnv(path: string, env: ProjectEnvConfig | null): Project[] {
   if (stored(path)) {
-    if (env) {
-      setProjectEnvValue(path, 'mode', env.mode)
-      setProjectEnvValue(path, 'runtime', env.runtime)
-      setProjectEnvValue(path, 'php', env.php)
-      setProjectEnvValue(path, 'package-manager', env.packageManager)
-      setProjectEnvValue(path, 'db', env.db)
-      setProjectEnvValue(path, 'db-admin', env.dbAdmin !== false)
+    if (!env) {
+      // Clearing the env means running on the host. The whole block goes rather
+      // than being set to some "off" value (an empty `[env]` would read back as
+      // container defaults), so absent means host-native with Herd, as the
+      // template documents it.
+      updateRepoProject(path, [{ op: 'removeEntry', table: 'env', index: 0 }])
     } else {
-      // Clearing the env means running on the host. The keys go rather than being
-      // set to some "off" value, so the block reads the way the template documents
-      // it: absent means host-native.
-      for (const key of ['mode', 'runtime', 'php', 'package-manager', 'db', 'db-admin']) {
-        updateRepoProject(path, [{ op: 'unset', table: 'env', key }])
+      setProjectEnvValue(path, 'mode', env.mode)
+      if (env.mode === 'container') {
+        setProjectEnvValue(path, 'runtime', env.runtime)
+        setProjectEnvValue(path, 'php', env.php)
+        setProjectEnvValue(path, 'package-manager', env.packageManager)
+        setProjectEnvValue(path, 'db', env.db)
+        setProjectEnvValue(path, 'db-admin', env.dbAdmin !== false)
+      } else {
+        for (const key of CONTAINER_KEYS) updateRepoProject(path, [{ op: 'unset', table: 'env', key }])
       }
     }
   }

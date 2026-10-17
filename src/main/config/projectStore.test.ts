@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { installHook } from './hook.test-helper.ts'
+import type { ContainerEnv } from './projectStore.ts'
 
 // configDir() is XDG-aware, so pointing XDG_CONFIG_HOME at a temp dir gives the
 // real module graph a real directory to work in — no filesystem mocking.
@@ -56,11 +57,37 @@ function repo(settings: string): string {
 test('the [env] block is optional and validated when present', () => {
   reset()
   repo('[env]\nmode = "container"\nruntime = "laravel"\nphp = "8.3"\npackage-manager = "bun"\ndb = "postgres"\n')
-  const env = store.scanProjects().projects[0].env
+  const env = store.scanProjects().projects[0].env as ContainerEnv
   assert.equal(env?.php, '8.3')
   assert.equal(env?.packageManager, 'bun')
   assert.equal(env?.db, 'postgres')
   assert.equal(env?.dbAdmin, true, 'defaults on, as documented')
+})
+
+test('mode herd / valet parse with no container keys', () => {
+  for (const mode of ['herd', 'valet']) {
+    reset()
+    repo(`[env]\nmode = "${mode}"\n`)
+    const { projects, errors } = store.scanProjects()
+    assert.deepEqual(errors, [])
+    assert.deepEqual(projects[0].env, { mode })
+  }
+})
+
+test('a bad env mode lists the allowed ones', () => {
+  reset()
+  repo('[env]\nmode = "docker"\n')
+  const { errors } = store.scanProjects()
+  assert.match(errors[0].reason, /container, herd, valet/)
+})
+
+test('[env] without a mode stays container; no [env] is no env', () => {
+  reset()
+  repo('[env]\nphp = "8.3"\n')
+  assert.equal(store.scanProjects().projects[0].env?.mode, 'container')
+  reset()
+  repo('')
+  assert.equal(store.scanProjects().projects[0].env, undefined)
 })
 
 test('a bad php version is reported and falls back, keeping the project', () => {
@@ -68,7 +95,7 @@ test('a bad php version is reported and falls back, keeping the project', () => 
   const path = repo('[env]\nphp = "8.1"\n')
   const { projects, errors } = store.scanProjects()
   assert.equal(projects.length, 1, 'one bad key does not lose the project')
-  assert.equal(projects[0].env?.php, '8.4')
+  assert.equal((projects[0].env as ContainerEnv).php, '8.4')
   assert.match(errors[0].reason, /8\.2, 8\.3, 8\.4, 8\.5/)
   assert.equal(errors[0].file, join(path, '.floe', 'config.toml'))
   assert.equal(errors[0].line, 2)
@@ -162,7 +189,7 @@ test('updateProject edits in place and keeps the documentation', () => {
   store.setProjectEnvValue(app, 'php', '8.5')
   const project_ = store.scanProjects().projects[0]
   assert.equal(project_.pinned, true)
-  assert.equal(project_.env?.php, '8.5')
+  assert.equal((project_.env as ContainerEnv).php, '8.5')
   assert.ok(readFileSync(join(project_.dir, 'config.toml'), 'utf8').includes('# | Identity'), 'comments survive an app write')
   const settings = readFileSync(join(app, '.floe', 'config.toml'), 'utf8')
   assert.ok(settings.includes('# | Containerized Environment'), 'env is written to the repo, from its template')
