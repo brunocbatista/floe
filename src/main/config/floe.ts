@@ -113,6 +113,7 @@ export interface FloeConfig {
   terminal: { shell?: string }
   /** The message box: vim motions on or off. */
   composer: { vim: boolean }
+  worktree: { lowercase: boolean }
   editor: { command: string }
   sandbox: { enabled: boolean }
   notifications: { sound: (typeof NOTIFY_SOUNDS)[number] }
@@ -167,6 +168,7 @@ export const DEFAULTS: FloeConfig = {
   user: { name: undefined },
   terminal: { shell: undefined },
   composer: { vim: false },
+  worktree: { lowercase: false },
   editor: { command: 'nvim' },
   sandbox: { enabled: true },
   notifications: { sound: 'chime' },
@@ -275,6 +277,7 @@ export function parseFloeConfig(raw: string, file: string): FloeConfigResult {
   const user = subTable(sink, raw, root, 'user')
   const terminal = subTable(sink, raw, root, 'terminal')
   const composer = subTable(sink, raw, root, 'composer')
+  const worktree = subTable(sink, raw, root, 'worktree')
   const editor = subTable(sink, raw, root, 'editor')
   const sandbox = subTable(sink, raw, root, 'sandbox')
   const notifications = subTable(sink, raw, root, 'notifications')
@@ -332,6 +335,9 @@ export function parseFloeConfig(raw: string, file: string): FloeConfigResult {
       user: { name: user?.optStr('name')?.trim() || undefined },
       terminal: { shell: terminal?.optStr('shell') },
       composer: { vim: composer?.bool('vim', d.composer.vim) ?? d.composer.vim },
+      worktree: {
+        lowercase: worktree?.bool('lowercase', d.worktree.lowercase) ?? d.worktree.lowercase
+      },
       // Not `oneOf`: the known ids are what Settings offers, not the whole set —
       // any editor binary on the machine is a valid answer here.
       editor: { command: editor?.str('command', d.editor.command) ?? d.editor.command },

@@ -285,7 +285,7 @@ function specFolder(worktreePath: string, branch?: string): string {
   const on = branch || branchOf(worktreePath)
   const matched = on ? specDirFor(worktreePath, on) : null
   if (matched) return matched
-  const slug = slugifyBranch(on).split('/').pop()
+  const slug = slugifyBranch(on, { preserveCase: false }).split('/').pop()
   // With no branch to name it after, "draw" is at least a folder a human can
   // find again — better than refusing a create the user just asked for.
   return slug || 'draw'

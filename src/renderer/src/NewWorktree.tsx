@@ -68,10 +68,12 @@ export function NewWorktreeForm({
   // the name flips between the two.
   const [base, setBase] = useState<string | null>(null)
   const [premise, setPremise] = useState('')
+  const [lower, setLower] = useState(false)
   const input = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     requestAnimationFrame(() => input.current?.focus())
+    void window.floe.config.get().then((c) => setLower(c.worktree.lowercase))
   }, [])
 
   // A refusal puts the keyboard back on the name — whatever you do next starts
@@ -82,12 +84,12 @@ export function NewWorktreeForm({
     if (error) input.current?.focus()
   }, [error])
 
-  // An exact name wins as-is — slugifying would lowercase an existing branch
-  // like `feat/DOS-219` into a name git does not have. Only a NEW name is
+  // An exact name wins as-is — slugifying could rewrite an existing branch
+  // like `feat/DOS_219` into a name git does not have. Only a NEW name is
   // slugged into a valid ref.
   const typed = name.trim()
   const exists = branches.includes(typed)
-  const branch = exists ? typed : slugifyBranch(name)
+  const branch = exists ? typed : slugifyBranch(name, { preserveCase: !lower })
   // Main first, then the worktree you are in, then Floe's other worktrees —
   // and nothing else. A branch with no worktree is not somewhere you were
   // working, so offering it as a base is noise in a list you scan by eye.
