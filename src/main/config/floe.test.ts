@@ -1,10 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtempSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { installHook } from './hook.test-helper.ts'
 
 installHook()
 
-const { parseFloeConfig, DEFAULTS } = await import('./floe.ts')
+const { parseFloeConfig, DEFAULTS, ensureFloeConfig, floeConfigPath, pickLocalServer } = await import('./floe.ts')
 const { FLOE_TOML } = await import('./template.ts')
 
 test('the generated template parses to exactly the documented defaults', () => {
@@ -19,6 +22,16 @@ test('the generated template parses to exactly the documented defaults', () => {
   assert.equal(config.update.checkIntervalHours, 6)
   // Commented out in the template on purpose — absence means "use the login shell".
   assert.equal(config.terminal.shell, undefined)
+})
+
+test('[environment] local-server defaults to herd, accepts valet, rejects the rest', () => {
+  assert.equal(parseFloeConfig(FLOE_TOML, 'floe.toml').config.environment.localServer, 'herd')
+  const ok = parseFloeConfig('[environment]\nlocal-server = "valet"\n', 'floe.toml')
+  assert.deepEqual(ok.errors, [])
+  assert.equal(ok.config.environment.localServer, 'valet')
+  const bad = parseFloeConfig('[environment]\nlocal-server = "mamp"\n', 'floe.toml')
+  assert.equal(bad.config.environment.localServer, 'herd')
+  assert.match(bad.errors[0].reason, /herd, valet/)
 })
 
 test('an empty file is every default, and not an error', () => {
@@ -213,4 +226,24 @@ test('an emptied effort reads as unset, not as a bad value', () => {
   const { config, errors } = parseFloeConfig('[harness.codex]\nmodel  = "gpt-5.6-sol"\neffort = ""\n', 'floe.toml')
   assert.deepEqual(errors, [])
   assert.deepEqual(config.harness.codex, { model: 'gpt-5.6-sol', effort: undefined })
+})
+
+test('the local server is detected: valet only when it is the only one installed', () => {
+  assert.equal(pickLocalServer(['valet']), 'valet')
+  assert.equal(pickLocalServer(['herd']), 'herd')
+  assert.equal(pickLocalServer(['herd', 'valet']), 'herd')
+  assert.equal(pickLocalServer([]), 'herd')
+})
+
+test('a fresh floe.toml is seeded with the detected manager, and an existing one is left alone', () => {
+  process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), 'floe-cfg-'))
+  ensureFloeConfig(() => 'valet')
+  const seeded = readFileSync(floeConfigPath(), 'utf8')
+  const { config, errors } = parseFloeConfig(seeded, 'floe.toml')
+  assert.deepEqual(errors, [])
+  assert.equal(config.environment.localServer, 'valet')
+  assert.ok(seeded.includes('# | Environment'), 'the documentation survives the edit')
+
+  ensureFloeConfig(() => 'herd')
+  assert.equal(readFileSync(floeConfigPath(), 'utf8'), seeded)
 })
