@@ -3,7 +3,7 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync,
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import type { BrowserWindow } from 'electron'
-import type { ProjectEnvConfig, ProvisionEvent, ProvisionStep } from '../shared/types'
+import type { ContainerEnvConfig, ProjectEnvConfig, ProvisionEvent, ProvisionStep } from '../shared/types'
 import { randomUUID } from 'node:crypto'
 import { detectPackageManager } from './devServer'
 import { floeConfig } from './config/floe'
@@ -40,7 +40,7 @@ import {
 } from './compose'
 
 // Provisioning makes a freshly created worktree ready to work: it runs the
-// per-stack setup steps (copy .env, install deps, link Herd, start commands) and
+// per-stack setup steps (copy .env, install deps, link Herd/Valet, start commands) and
 // streams each step's progress to the checklist UI. Steps are idempotent so a
 // retry (or a re-run after a skip) is always safe.
 
@@ -58,7 +58,7 @@ export function detectStack(worktreePath: string): Stack | null {
 // `git worktree add` can return before the working-tree files are fully visible
 // on disk to a separate process, so detecting the stack the instant it resolves
 // can momentarily see an empty directory and report `null` — which makes the
-// whole recipe (copy .env, composer, Herd, install) silently skip and "do
+// whole recipe (copy .env, composer, Herd/Valet, install) silently skip and "do
 // nothing". Since the worktree is a checkout of the same repo, it gets the same
 // stack as the main checkout once git finishes; poll until it materialises.
 function waitForStack(worktreePath: string, timeoutMs = 15000): Promise<Stack | null> {
@@ -79,12 +79,60 @@ interface Ctx {
   worktreePath: string
   branch: string
   projectName: string
-  linkName: string // Herd link name → `<linkName>.test`
+  linkName: string // Herd/Valet link name → `<linkName>.test`
   domain: string
-  env?: ProjectEnvConfig // set → containerized recipe; unset → host-native
+  env?: ProjectEnvConfig // container → containerized recipe; herd/valet/unset → host-native
 }
 
 type Log = (text: string) => void
+
+// Which tool links a host-native worktree's `.test` site: the project's own
+// pin (`[env] mode` herd/valet) when it has one, else this machine's
+// `[environment] local-server` (Herd unless changed).
+export type LocalServer = 'herd' | 'valet'
+export const hostManager = (env?: ProjectEnvConfig): LocalServer =>
+  env?.mode === 'herd' || env?.mode === 'valet' ? env.mode : floeConfig().environment.localServer
+
+// Newer Laravel's `migrate --force` creates a missing MySQL/MariaDB/Postgres
+// database itself, over the app's own connection — so nothing here needs a DB
+// client or knows how the server is run (Takeout, DBngin, …). Older Laravel does
+// not; it still needs the database created first. Asked of the installed
+// framework rather than a version number, so it holds for whichever copy composer
+// resolved. (No vendor yet, e.g. composer skipped: assume not.)
+function frameworkCreatesDatabase(worktreePath: string): boolean {
+  const file = join(worktreePath, 'vendor/laravel/framework/src/Illuminate/Database/Console/Migrations/MigrateCommand.php')
+  try {
+    return /createMissingMySql/i.test(readFileSync(file, 'utf8'))
+  } catch {
+    return false
+  }
+}
+
+// Run one SQL statement against the MySQL/MariaDB/Postgres a host-native
+// worktree's .env points at. Through PHP's PDO rather than the `mysql`/`psql`
+// client: PHP is already required for `artisan`, while a client is not installed
+// when the server is Takeout's container (or any other server reached over a
+// published port). The DSN, credentials and SQL ride in the environment, never on
+// the command line.
+const DB_EXEC_PHP =
+  '$d=new PDO(getenv("FLOE_DB_DSN"),getenv("FLOE_DB_USER"),getenv("FLOE_DB_PASSWORD"),[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);$d->exec(getenv("FLOE_DB_SQL"));'
+
+function dbExec(driver: 'mysql' | 'pgsql', env: Record<string, string>, sql: string, cwd: string, log: Log): Promise<void> {
+  const host = env.DB_HOST || '127.0.0.1'
+  const pg = driver === 'pgsql'
+  // Postgres: the maintenance `postgres` DB, since you can't drop the one you are attached to.
+  const dsn = `${driver}:host=${host};port=${env.DB_PORT || (pg ? '5432' : '3306')}${pg ? ';dbname=postgres' : ''}`
+  return runShell('php', ['-r', DB_EXEC_PHP], cwd, log, {
+    FLOE_DB_DSN: dsn,
+    FLOE_DB_USER: env.DB_USERNAME || (pg ? 'postgres' : 'root'),
+    FLOE_DB_PASSWORD: env.DB_PASSWORD || '',
+    FLOE_DB_SQL: sql
+  })
+}
+
+// The container recipe only runs for a container env (see the recipe pick), so its
+// steps read the env through this one narrowing rather than repeating a cast.
+const containerEnv = (ctx: Ctx): ContainerEnvConfig => ctx.env as ContainerEnvConfig
 
 interface StepDef {
   id: string
@@ -136,7 +184,7 @@ const shQuote = (s: string): string => `'${s.replace(/'/g, "'\\''")}'`
 // runner do. A packaged GUI launch otherwise has a minimal PATH and `composer`,
 // `herd`, `bun` come back "not found". Rejects on a non-zero exit or spawn error;
 // a missing command (login-shell exit 127, or ENOENT on Windows) becomes a clear
-// "<cmd> not found" so callers like the Herd step can treat it as a skip.
+// "<cmd> not found" so callers like the site step can treat it as a skip.
 function runShell(
   cmd: string,
   args: string[],
@@ -396,7 +444,7 @@ const DEFAULT_PHP_MINOR = 4
 //
 // This is a heuristic, not a semver solver: it picks the first buildable minor the
 // constraint mentions and clamps it. Pin an explicit Project.env to override.
-export function phpFromConstraint(req: string): ProjectEnvConfig['php'] {
+export function phpFromConstraint(req: string): ContainerEnvConfig['php'] {
   const exclusive = req.match(/<\s*8\.(\d+)/)
   const ceiling = exclusive ? Number(exclusive[1]) - 1 : Infinity
   const mentioned = [...req.matchAll(/8\.(\d+)/g)].map((m) => Number(m[1]))
@@ -404,7 +452,7 @@ export function phpFromConstraint(req: string): ProjectEnvConfig['php'] {
   // A constraint below everything we build (`<8.2`) still has to produce a
   // buildable image; it will fail at composer install, where the reason is legible.
   const clamped = Math.min(Math.max(Math.min(picked, ceiling), SUPPORTED_PHP[0]), SUPPORTED_PHP.at(-1) as number)
-  return `8.${clamped}` as ProjectEnvConfig['php']
+  return `8.${clamped}` as ContainerEnvConfig['php']
 }
 
 // The headless server has no host PHP/Herd, so every Laravel worktree MUST run in
@@ -412,8 +460,8 @@ export function phpFromConstraint(req: string): ProjectEnvConfig['php'] {
 // sensible container config: PHP pinned from composer.json's `require.php` (else the
 // latest supported), package manager from the lockfile, MySQL by default.
 // ponytail: MySQL/latest-PHP defaults; pin an explicit Project.env to override.
-export function defaultContainerEnv(worktreePath: string): ProjectEnvConfig {
-  let php: ProjectEnvConfig['php'] = '8.4'
+export function defaultContainerEnv(worktreePath: string): ContainerEnvConfig {
+  let php: ContainerEnvConfig['php'] = '8.4'
   const composer = join(worktreePath, 'composer.json')
   if (existsSync(composer)) {
     try {
@@ -516,7 +564,7 @@ const containerEnvVarsStep: StepDef = {
       return 'skipped'
     }
     const cfg = readSupportConfig()
-    const env = ctx.env as ProjectEnvConfig
+    const env = containerEnv(ctx)
     const s = containerSlug(ctx)
     const db = ctx.linkName.replace(/[^A-Za-z0-9_]/g, '_')
     const isPg = env.db === 'postgres'
@@ -549,7 +597,7 @@ const composeUpStep: StepDef = {
   run: async (ctx, log) => {
     const cfg = readSupportConfig()
     const s = containerSlug(ctx)
-    const path = writeWorktreeCompose(s, ctx.worktreePath, ctx.env as ProjectEnvConfig)
+    const path = writeWorktreeCompose(s, ctx.worktreePath, containerEnv(ctx))
     log(`Wrote ${path}`)
     // --build so the Node+bun layer on top of serversideup is (re)built as needed.
     await runShell('docker', ['compose', '-f', path, 'up', '-d', '--build'], ctx.worktreePath, log)
@@ -580,7 +628,7 @@ const composerInstallContainerStep: StepDef = {
 }
 
 // JS deps install INSIDE the container — the image has node+bun baked in, and the
-// server host has neither. (The host-side nodeInstallStep is for desktop/Herd mode.)
+// server host has neither. (The host-side nodeInstallStep is for desktop host mode.)
 const nodeInstallContainerStep: StepDef = {
   id: 'node-install',
   label: 'Install JS dependencies (in container)',
@@ -603,7 +651,7 @@ const createDbStep: StepDef = {
   run: async (ctx, log) => {
     const cfg = readSupportConfig()
     const db = ctx.linkName.replace(/[^A-Za-z0-9_]/g, '_')
-    if ((ctx.env as ProjectEnvConfig).db === 'postgres') {
+    if (containerEnv(ctx).db === 'postgres') {
       // Postgres has no CREATE DATABASE IF NOT EXISTS — guard with a SELECT.
       const script = `psql -U postgres -tc "SELECT 1 FROM pg_database WHERE datname='${db}'" | grep -q 1 || psql -U postgres -c 'CREATE DATABASE "${db}"'`
       await runShell(
@@ -775,18 +823,20 @@ const laravelRecipe: StepDef[] = [
     }
   },
   {
-    id: 'herd',
-    label: 'Link Herd site',
+    id: 'site',
+    label: 'Link site',
     run: async (ctx, log) => {
+      // The project's pin, else the machine's local-server (Herd by default).
+      const manager = hostManager(ctx.env)
       try {
-        await runShell('herd', ['link', ctx.linkName], ctx.worktreePath, log)
+        await runShell(manager, ['link', ctx.linkName], ctx.worktreePath, log)
         log(`Linked as ${ctx.domain}`)
         return 'done'
       } catch (e) {
-        // Herd isn't installed everywhere — treat a missing binary as a skip,
-        // not a hard failure.
+        // Herd/Valet aren't installed everywhere — treat a missing binary as a
+        // skip, not a hard failure.
         if (e instanceof Error && /not found/.test(e.message)) {
-          log('herd not found — skipping')
+          log(`${manager} not found — skipping`)
           return 'skipped'
         }
         throw e
@@ -798,7 +848,7 @@ const laravelRecipe: StepDef[] = [
     // Each worktree gets its own DB_DATABASE (set in env-vars), so the database is
     // brand new. `migrate` can't create the database — so for MySQL/MariaDB create
     // it first, then run the migrations. Runs through the login shell so `php`/
-    // `mysql` resolve (Herd). `--force` keeps it from blocking on the production
+    // `mysql` resolve (Herd/Valet). `--force` keeps it from blocking on the production
     // confirmation prompt in a non-interactive run.
     id: 'migrate',
     label: 'Migrate (migrate --force)',
@@ -807,19 +857,13 @@ const laravelRecipe: StepDef[] = [
       const conn = (env.DB_CONNECTION || 'mysql').toLowerCase()
       const db = env.DB_DATABASE
       if ((conn === 'mysql' || conn === 'mariadb') && db) {
-        const host = env.DB_HOST || '127.0.0.1'
-        const port = env.DB_PORT || '3306'
-        const user = env.DB_USERNAME || 'root'
-        const sql = `CREATE DATABASE IF NOT EXISTS \`${db.replace(/`/g, '')}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`
-        log(`Ensuring database \`${db}\` exists`)
-        // MYSQL_PWD passes the password without exposing it on the command line.
-        await runShell(
-          'mysql',
-          ['--protocol=TCP', `--host=${host}`, `--port=${port}`, `--user=${user}`, '-e', sql],
-          ctx.worktreePath,
-          log,
-          env.DB_PASSWORD ? { MYSQL_PWD: env.DB_PASSWORD } : undefined
-        )
+        if (frameworkCreatesDatabase(ctx.worktreePath)) {
+          log('migrate creates the database if it is missing')
+        } else {
+          const sql = `CREATE DATABASE IF NOT EXISTS \`${db.replace(/`/g, '')}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`
+          log(`Ensuring database \`${db}\` exists`)
+          await dbExec('mysql', env, sql, ctx.worktreePath, log)
+        }
       }
       await runShell('php', ['artisan', 'migrate', '--force'], ctx.worktreePath, log)
       return 'done'
@@ -916,33 +960,47 @@ async function dropContainerWorktree(
 // Guard: never drop the main checkout's database (a copied-but-never-repointed
 // .env would otherwise nuke the real dev DB). Returns 'dropped' or 'skipped';
 // throws (message → step detail) when the drop command fails.
-// Unlink the worktree's Herd site, undoing the `herd link` the Laravel recipe
+// Unlink the worktree's Herd/Valet site, undoing the `link` the Laravel recipe
 // made. Runs BEFORE the worktree directory goes: `herd unlink` reads the site
 // from the directory it is called in, and a link left behind keeps serving a
-// path that no longer exists.
+// path that no longer exists. Valet is told the name instead — the one the link
+// was made under, which is the host of the worktree's APP_URL (`<name>.test`),
+// else the directory name (Valet's own default).
 //
-// Every absence is a skip, not a failure: no Herd installed, a stack that never
-// linked anything, a site already unlinked by hand. Removing a worktree must not
-// stop on a site that is already gone.
-export async function unlinkWorktreeSite(worktreePath: string, log: Log): Promise<'unlinked' | 'skipped'> {
+// Every absence is a skip, not a failure: no Herd/Valet installed, a stack that
+// never linked anything, a site already unlinked by hand. Removing a worktree
+// must not stop on a site that is already gone.
+export async function unlinkWorktreeSite(
+  worktreePath: string,
+  log: Log,
+  manager: LocalServer = 'herd'
+): Promise<'unlinked' | 'skipped'> {
   if (!existsSync(join(worktreePath, 'artisan'))) {
-    log('Not a Laravel worktree — no Herd site to unlink')
+    log(`Not a Laravel worktree — no ${manager} site to unlink`)
     return 'skipped'
   }
+  const args = manager === 'valet' ? ['unlink', valetSiteName(worktreePath)] : ['unlink']
   try {
-    await runShell('herd', ['unlink'], worktreePath, log)
+    await runShell(manager, args, worktreePath, log)
     return 'unlinked'
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)
     if (/not found/i.test(message)) {
-      log('herd not found — skipping')
+      log(`${manager} not found — skipping`)
       return 'skipped'
     }
-    // Herd exits non-zero when the directory was never linked. That is the
-    // desired end state either way, so it is reported, not raised.
-    log(`herd unlink: ${message}`)
+    // Both exit non-zero when the site was never linked. That is the desired end
+    // state either way, so it is reported, not raised.
+    log(`${manager} unlink: ${message}`)
     return 'skipped'
   }
+}
+
+// `http://myapp-feat-one.test` → `myapp-feat-one`: drop the scheme, port, path
+// and the TLD (whatever Valet is configured with).
+function valetSiteName(worktreePath: string): string {
+  const host = getAppUrl(worktreePath)?.match(/^(?:[a-z][a-z0-9+.-]*:\/\/)?([^/:?#]+)/i)?.[1]
+  return host?.replace(/\.[^.]+$/, '') || basename(worktreePath)
 }
 
 export async function dropWorktreeDatabase(
@@ -969,35 +1027,14 @@ export async function dropWorktreeDatabase(
     log(`Refusing to drop \`${db}\` — it's the main checkout's database`)
     return 'skipped'
   }
-  const host = env.DB_HOST || '127.0.0.1'
-  const user = env.DB_USERNAME || (isPg ? 'postgres' : 'root')
   log(`Dropping database \`${db}\``)
   if (isMysql) {
-    const port = env.DB_PORT || '3306'
-    // MYSQL_PWD passes the password without exposing it on the command line.
-    await runShell(
-      'mysql',
-      ['--protocol=TCP', `--host=${host}`, `--port=${port}`, `--user=${user}`, '-e', `DROP DATABASE IF EXISTS \`${db.replace(/`/g, '')}\``],
-      worktreePath,
-      log,
-      env.DB_PASSWORD ? { MYSQL_PWD: env.DB_PASSWORD } : undefined
-    )
+    await dbExec('mysql', env, `DROP DATABASE IF EXISTS \`${db.replace(/`/g, '')}\``, worktreePath, log)
   } else {
-    const port = env.DB_PORT || '5432'
-    // Connect to the maintenance `postgres` DB (you can't drop the DB you're
-    // attached to). WITH (FORCE) terminates active connections — e.g. a still-
-    // running dev server — so the drop doesn't fail.
+    // WITH (FORCE) terminates active connections — e.g. a still-running dev
+    // server — so the drop doesn't fail.
     // ponytail: FORCE needs Postgres 13+; pre-13 would need pg_terminate_backend first.
-    const sql = `DROP DATABASE IF EXISTS "${db.replace(/"/g, '')}" WITH (FORCE)`
-    // PGPASSWORD passes the password without exposing it; --no-password fails
-    // fast instead of prompting when auth is needed but unset.
-    await runShell(
-      'psql',
-      [`--host=${host}`, `--port=${port}`, `--username=${user}`, '--dbname=postgres', '--no-password', '-c', sql],
-      worktreePath,
-      log,
-      env.DB_PASSWORD ? { PGPASSWORD: env.DB_PASSWORD } : undefined
-    )
+    await dbExec('pgsql', env, `DROP DATABASE IF EXISTS "${db.replace(/"/g, '')}" WITH (FORCE)`, worktreePath, log)
   }
   return 'dropped'
 }
@@ -1027,7 +1064,8 @@ async function syncContainerWorktree(
     await runShell('docker', ['compose', '-f', composePath, 'down'], worktreePath, log)
     for (const h of hosts) if (await removeWorktreeRoute(h)) log(`Removed route ${h}`)
   }
-  writeWorktreeCompose(s, worktreePath, getProjectEnv(root) ?? defaultContainerEnv(worktreePath))
+  const stored = getProjectEnv(root)
+  writeWorktreeCompose(s, worktreePath, stored?.mode === 'container' ? stored : defaultContainerEnv(worktreePath))
   const dotenv = join(worktreePath, '.env')
   if (existsSync(dotenv)) writeFileSync(dotenv, setEnvVars(readFileSync(dotenv, 'utf8'), routedEnvVars(s, cfg, worktreePath)))
 }
@@ -1247,11 +1285,12 @@ async function runProvision(
 
   const projectName = basename(root)
   const linkName = `${projectName}-${slug(branch)}`
-  // On the headless server there's no host PHP/Herd, so a Laravel worktree ALWAYS runs
-  // in Docker — synthesize a container env when the project didn't pin one.
-  const env =
-    getProjectEnv(root) ??
-    (process.env.FLOE_IS_SERVER === '1' && stack === 'laravel' ? defaultContainerEnv(worktreePath) : undefined)
+  // On the headless server there's no host PHP/Herd/Valet, so a Laravel worktree ALWAYS
+  // runs in Docker — synthesize a container env unless the project pinned one (a
+  // herd/valet mode is ignored there).
+  const stored = getProjectEnv(root)
+  const forceContainer = process.env.FLOE_IS_SERVER === '1' && stack === 'laravel' && stored?.mode !== 'container'
+  const env = forceContainer ? defaultContainerEnv(worktreePath) : stored
   const ctx: Ctx = { win, root, worktreePath, branch, projectName, linkName, domain: `${linkName}.test`, env }
 
   // Container mode (Project.env, or forced on the server above) overrides the
