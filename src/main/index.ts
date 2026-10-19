@@ -25,6 +25,7 @@ import {
   addProject,
   addHost,
   addProjectByPath,
+  getProjectEnv,
   homeWorktree,
   isHomePath,
   listGroups,
@@ -292,6 +293,7 @@ import {
   provisionWorktree,
   answerProvisionAsk,
   dropWorktreeDatabase,
+  hostManager,
   unlinkWorktreeSite,
   ensureContainerUp
 } from './provision'
@@ -593,12 +595,13 @@ async function reconcileContainerWorktrees(): Promise<void> {
   }
 }
 
-// Undo the `herd link` the Laravel recipe made. Runs while the directory is
-// still there — `herd unlink` reads the site from the cwd it is called in.
-export async function unlinkSite(target: string): Promise<Record<string, unknown>> {
+// Undo the Herd/Valet `link` the Laravel recipe made (the project's env says
+// which). Runs while the directory is still there — `herd unlink` reads the site
+// from the cwd it is called in.
+export async function unlinkSite(root: string, target: string): Promise<Record<string, unknown>> {
   const lines: string[] = []
   try {
-    const result = await unlinkWorktreeSite(target, (t) => lines.push(t))
+    const result = await unlinkWorktreeSite(target, (t) => lines.push(t), hostManager(getProjectEnv(root)))
     return { ok: true, unlinked: result === 'unlinked', detail: lines[lines.length - 1] }
   } catch (e) {
     return { ok: false, unlinked: false, message: errorText(e) }
@@ -1460,7 +1463,7 @@ export function registerWorktreeIpc(): void {
   )
   // Undo the `herd link` the Laravel recipe made. Runs while the directory is
   // still there — `herd unlink` reads the site from the cwd it is called in.
-  handle('remove:unlinkSite', (_event, target: string) => unlinkSite(target))
+  handle('remove:unlinkSite', (_event, root: string, target: string) => unlinkSite(root, target))
   // Drop the worktree's per-branch database (MySQL/MariaDB/Postgres). Reads the
   // worktree's .env, so the renderer runs this step before the worktree is torn
   // down. Never touches the main checkout's database.

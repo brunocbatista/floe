@@ -473,9 +473,9 @@ export function buildFloeApi(ipcRenderer: IpcLike, host: FloeHost) {
         ipcRenderer.invoke('remove:branch', root, branch, force, base),
       dropDatabase: (root: string, target: string): Promise<DropDatabaseResult> =>
         ipcRenderer.invoke('remove:dropDatabase', root, target),
-      // Undo the Herd site the Laravel recipe linked, before the directory goes.
-      unlinkSite: (target: string): Promise<UnlinkSiteResult> =>
-        ipcRenderer.invoke('remove:unlinkSite', target)
+      // Undo the Herd/Valet site the Laravel recipe linked, before the directory goes.
+      unlinkSite: (root: string, target: string): Promise<UnlinkSiteResult> =>
+        ipcRenderer.invoke('remove:unlinkSite', root, target)
     },
     // The worktree's standing brief. `ensure` creates the scaffold when there
     // isn't one yet, so the edit command always has a file to open.

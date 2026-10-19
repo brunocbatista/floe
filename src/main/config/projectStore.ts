@@ -18,6 +18,7 @@
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { HOST_SITE_MODES, type HostEnvConfig } from '../../shared/types'
 import { configDir } from '../dataDir'
 import { ErrorSink, type ConfigError } from './errors'
 import { TableReader, subTable } from './read'
@@ -30,7 +31,9 @@ export const PHP_VERSIONS = ['8.2', '8.3', '8.4', '8.5'] as const
 export const PACKAGE_MANAGERS = ['bun', 'pnpm', 'yarn', 'npm'] as const
 export const DATABASES = ['mysql', 'postgres'] as const
 
-export interface ProjectEnv {
+export const ENV_MODES = ['container', ...HOST_SITE_MODES] as const
+
+export interface ContainerEnv {
   mode: 'container'
   runtime: 'laravel'
   php: (typeof PHP_VERSIONS)[number]
@@ -38,6 +41,8 @@ export interface ProjectEnv {
   db: (typeof DATABASES)[number]
   dbAdmin: boolean
 }
+
+export type ProjectEnv = ContainerEnv | HostEnvConfig
 
 export interface ProjectConfig {
   /** Absolute path to the repository. The project's identity. */
@@ -178,8 +183,11 @@ function readRepoSettings(projectPath: string): { settings: RepoSettings; errors
 }
 
 function readEnv(t: TableReader): ProjectEnv {
+  const mode = t.oneOf('mode', ENV_MODES, 'container')
+  // Host modes carry no container keys, so none are read (or validated).
+  if (mode !== 'container') return { mode }
   return {
-    mode: t.oneOf('mode', ['container'] as const, 'container'),
+    mode,
     runtime: t.oneOf('runtime', ['laravel'] as const, 'laravel'),
     php: t.oneOf('php', PHP_VERSIONS, '8.4'),
     packageManager: t.oneOf('package-manager', PACKAGE_MANAGERS, 'npm'),

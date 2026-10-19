@@ -14,6 +14,7 @@ import type {
   Worktree
 } from '../shared/types'
 import { slugifyBranch } from '../shared/slug'
+import { floeConfig } from './config/floe'
 import { forgetWorktree, getReviewCheckpoint, setReviewCheckpoint } from './sessionStore'
 import { cancelProvision } from './provisionRuns'
 
@@ -391,9 +392,8 @@ export async function listRemoteBranches(root: string): Promise<RemoteBranch[]> 
 export interface CreateWorktreeOptions {
   base?: string
   note?: string
-  // Keep the branch name's original casing instead of lowercasing it. Used when
-  // the caller has already shaped a convention-bearing name (e.g. "feat/DOS-219")
-  // and the upper-case issue key must survive into the real git branch.
+  // Overrides `[worktree] lowercase` in floe.toml for this one call. Unset
+  // follows the setting, which keeps capitals unless the user asked otherwise.
   preserveCase?: boolean
   // Re-point an *existing* branch at `base` instead of checking it out as it is.
   // For branches whose worktree was removed but that git kept: without this, the
@@ -414,7 +414,9 @@ export async function createWorktree(
 ): Promise<Worktree[]> {
   // The name may arrive free-form (spaces, capitals, accents). Slug it so the
   // git branch and the directory are always valid — never let raw input reach git.
-  const slug = slugifyBranch(branch, { preserveCase: options.preserveCase })
+  const slug = slugifyBranch(branch, {
+    preserveCase: options.preserveCase ?? !floeConfig().worktree.lowercase
+  })
   if (!slug) {
     throw new Error(`Cannot derive a branch name from: "${branch}"`)
   }

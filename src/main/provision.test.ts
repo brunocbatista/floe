@@ -255,6 +255,10 @@ const lines = (): string[] => globalThis.__provSpawns.map((s) => s.args.at(-1) ?
 const call = (needle: string): SpawnCall | undefined =>
   globalThis.__provSpawns.find((s) => (s.args.at(-1) ?? '').includes(needle))
 const line = (needle: string): string => call(needle)?.args.at(-1) ?? ''
+// The host MySQL statements run through PHP's PDO with the SQL and credentials
+// in the environment (never argv), so they are found by the SQL they carry.
+const sqlCall = (needle: string): SpawnCall | undefined =>
+  globalThis.__provSpawns.find((s) => (s.env?.FLOE_DB_SQL ?? '').includes(needle))
 
 // ── the .env reader ──────────────────────────────────────────────────────────
 
@@ -299,9 +303,106 @@ test('exit 127 from the login shell reads as "<cmd> not found"', async () => {
 
   const events = await provision(root, wt)
 
-  assert.equal(status(events, 'herd'), 'skipped')
-  assert.match(logOf(events, 'herd'), /herd not found — skipping/)
+  assert.equal(status(events, 'site'), 'skipped')
+  assert.match(logOf(events, 'site'), /herd not found — skipping/)
   assert.equal(finished(events), true) // a missing Herd is not a failed provision
+})
+
+function hostProject(root: string, mode: 'herd' | 'valet'): void {
+  store.createProject(root)
+  store.setProjectEnvValue(root, 'mode', mode)
+}
+
+test('mode valet links the site with valet, never herd, and stays off the container recipe', async () => {
+  reset()
+  const root = checkout('floe-root-', LARAVEL)
+  const wt = checkout('floe-wt-', LARAVEL)
+  hostProject(root, 'valet')
+
+  const events = await provision(root, wt)
+
+  const link = `'valet' 'link' '${basename(root)}-feat-one'`
+  assert.equal(line(link), link)
+  assert.equal(call("'herd'"), undefined)
+  assert.equal(status(events, 'site'), 'done')
+  assert.equal(stepEvents(events, 'compose-up').length, 0)
+  assert.equal(call("'docker'"), undefined)
+})
+
+test('mode herd and an unset env both link with herd', async () => {
+  for (const mode of ['herd', undefined] as const) {
+    reset()
+    const root = checkout('floe-root-', LARAVEL)
+    const wt = checkout('floe-wt-', LARAVEL)
+    if (mode) hostProject(root, mode)
+
+    const events = await provision(root, wt)
+
+    assert.ok(call(`'herd' 'link' '${basename(root)}-feat-one'`))
+    assert.equal(call("'valet'"), undefined)
+    assert.equal(status(events, 'site'), 'done')
+  }
+})
+
+// The machine's own choice (floe.toml) decides herd vs valet when the project
+// doesn't pin one — so two people on one repo can use different tools.
+async function withLocalServer<T>(manager: 'valet', fn: () => Promise<T>): Promise<T> {
+  const file = join(HOME, '.config', 'floe', 'floe.toml')
+  const before = readFileSync(file, 'utf8')
+  writeFileSync(file, `${before}\n[environment]\nlocal-server = "${manager}"\n`)
+  invalidateFloeConfig()
+  try {
+    return await fn()
+  } finally {
+    writeFileSync(file, before)
+    invalidateFloeConfig()
+  }
+}
+
+test('the machine local-server picks valet for a project with no [env]; a project pin wins', async () => {
+  await withLocalServer('valet', async () => {
+    reset()
+    const root = checkout('floe-root-', LARAVEL)
+    const wt = checkout('floe-wt-', LARAVEL)
+    store.createProject(root)
+    await provision(root, wt)
+    assert.ok(call(`'valet' 'link' '${basename(root)}-feat-one'`))
+    assert.equal(call("'herd'"), undefined)
+
+    reset()
+    const root2 = checkout('floe-root-', LARAVEL)
+    const wt2 = checkout('floe-wt-', LARAVEL)
+    hostProject(root2, 'herd')
+    await provision(root2, wt2)
+    assert.ok(call("'herd' 'link'"))
+    assert.equal(call("'valet'"), undefined)
+  })
+})
+
+test('a missing valet binary skips the site step and the provision still finishes', async () => {
+  reset()
+  globalThis.__provSpawnPlan = (_cmd, args) => ({ code: args.at(-1)?.includes("'valet'") ? 127 : 0 })
+  const root = checkout('floe-root-', LARAVEL)
+  const wt = checkout('floe-wt-', LARAVEL)
+  hostProject(root, 'valet')
+
+  const events = await provision(root, wt)
+
+  assert.equal(status(events, 'site'), 'skipped')
+  assert.match(logOf(events, 'site'), /valet not found — skipping/)
+  assert.equal(finished(events), true)
+})
+
+test('on the server a valet env is ignored: Laravel gets the container recipe', async () => {
+  reset()
+  const root = checkout('floe-root-', { ...LARAVEL, '.env': 'DB_CONNECTION=mysql\n' })
+  const wt = checkout('floe-wt-', LARAVEL)
+  hostProject(root, 'valet')
+
+  const events = await onServer(() => provision(root, wt))
+
+  assert.ok(planIds(events).includes('compose-up'))
+  assert.equal(call("'valet'"), undefined)
 })
 
 test('a non-zero exit fails the step and stops the recipe there', async () => {
@@ -314,7 +415,7 @@ test('a non-zero exit fails the step and stops the recipe there', async () => {
 
   assert.equal(status(events, 'composer'), 'failed')
   assert.equal(detail(events, 'composer'), 'composer exited with code 3')
-  assert.equal(stepEvents(events, 'herd').length, 0) // the step after it never ran
+  assert.equal(stepEvents(events, 'site').length, 0) // the step after it never ran
   assert.equal(finished(events), false)
 })
 
@@ -449,6 +550,34 @@ test('unlink runs in the worktree it is removing', async () => {
   assert.equal(await unlinkWorktreeSite(wt, () => {}), 'unlinked')
   assert.equal(line("'herd' 'unlink'"), "'herd' 'unlink'")
   assert.equal(globalThis.__provSpawns[0].cwd, wt)
+})
+
+test('valet unlink is told the name the site was linked under, from APP_URL', async () => {
+  reset()
+  const wt = checkout('floe-wt-', { ...LARAVEL, '.env': 'APP_URL=http://myapp-feat-one.test\n' })
+
+  assert.equal(await unlinkWorktreeSite(wt, () => {}, 'valet'), 'unlinked')
+  assert.equal(line("'valet' 'unlink'"), "'valet' 'unlink' 'myapp-feat-one'")
+  assert.equal(call("'herd'"), undefined)
+})
+
+test('valet unlink falls back to the directory name without an APP_URL', async () => {
+  reset()
+  const wt = checkout('floe-wt-', LARAVEL)
+
+  await unlinkWorktreeSite(wt, () => {}, 'valet')
+  assert.equal(line("'valet' 'unlink'"), `'valet' 'unlink' '${basename(wt)}'`)
+})
+
+test('valet unlink: a missing binary or a never-linked site is a skip, never a failure', async () => {
+  const wt = checkout('floe-wt-', LARAVEL)
+  for (const code of [127, 1]) {
+    reset()
+    globalThis.__provSpawnPlan = () => ({ code })
+    const logged: string[] = []
+    assert.equal(await unlinkWorktreeSite(wt, (t) => logged.push(t), 'valet'), 'skipped')
+    assert.match(logged.join(''), code === 127 ? /valet not found — skipping/ : /valet unlink:/)
+  }
 })
 
 // ── the Electron repair ──────────────────────────────────────────────────────
@@ -703,7 +832,7 @@ test('the Laravel recipe rewrites .env, prepares storage, links Herd and migrate
     'env-vars',
     'storage-dirs',
     'composer',
-    'herd',
+    'site',
     'node-install',
     'migrate',
     'seed',
@@ -716,19 +845,26 @@ test('the Laravel recipe rewrites .env, prepares storage, links Herd and migrate
   assert.match(env, /^DB_PASSWORD=secret$/m) // untouched keys stay
   assert.ok(existsSync(join(wt, 'storage/framework/views')))
   assert.ok(existsSync(join(wt, 'bootstrap/cache')))
-  assert.equal(status(events, 'herd'), 'done')
-  assert.match(logOf(events, 'herd'), new RegExp(`Linked as ${domain}`))
+  assert.equal(status(events, 'site'), 'done')
+  assert.match(logOf(events, 'site'), new RegExp(`Linked as ${domain}`))
   assert.equal(status(events, 'node-install'), 'skipped') // no package.json here
 
   // The database is created before migrating, with the password off the command line.
-  const create = call('CREATE DATABASE IF NOT EXISTS')
+  // No `mysql` client is needed (Takeout's MySQL lives in a container).
+  const create = sqlCall('CREATE DATABASE IF NOT EXISTS')
   assert.ok(create)
-  assert.equal(
-    create.args.at(-1),
-    `'mysql' '--protocol=TCP' '--host=127.0.0.1' '--port=3306' '--user=root' '-e' 'CREATE DATABASE IF NOT EXISTS \`${db}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci'`
+  assert.deepEqual(
+    [create.cmd, create.args.at(-1)?.startsWith("'php' '-r' ")],
+    ['/bin/zsh', true]
   )
-  assert.equal(create.env.MYSQL_PWD, 'secret')
-  assert.ok(lines().indexOf(create.args.at(-1) ?? '') < lines().indexOf("'php' 'artisan' 'migrate' '--force'"))
+  assert.equal(create.env.FLOE_DB_SQL, `CREATE DATABASE IF NOT EXISTS \`${db}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`)
+  assert.deepEqual(
+    [create.env.FLOE_DB_DSN, create.env.FLOE_DB_USER, create.env.FLOE_DB_PASSWORD],
+    ['mysql:host=127.0.0.1;port=3306', 'root', 'secret']
+  )
+  assert.equal(call("'mysql'"), undefined)
+  assert.equal(create.args.at(-1)?.includes('secret'), false, 'the password is not on the command line')
+  assert.ok(globalThis.__provSpawns.indexOf(create) < globalThis.__provSpawns.indexOf(call("'migrate'") as SpawnCall))
   assert.equal(line("'php' 'artisan' 'db:seed' '--force'"), "'php' 'artisan' 'db:seed' '--force'")
   assert.equal(finished(events), true)
 })
@@ -743,10 +879,29 @@ test('the DB host, port and user come from the worktree .env', async () => {
 
   await provision(root, wt)
 
-  const create = call('CREATE DATABASE IF NOT EXISTS')
+  const create = sqlCall('CREATE DATABASE IF NOT EXISTS')
   assert.ok(create)
-  assert.match(create.args.at(-1) ?? '', /'--host=db\.internal' '--port=3307' '--user=floe'/)
-  assert.equal(create.env.MYSQL_PWD, undefined) // no password in .env, none passed
+  assert.deepEqual(
+    [create.env.FLOE_DB_DSN, create.env.FLOE_DB_USER, create.env.FLOE_DB_PASSWORD],
+    ['mysql:host=db.internal;port=3307', 'floe', '']
+  )
+})
+
+test('a Laravel whose migrate creates the database itself is not given a pre-created one', async () => {
+  reset()
+  const root = checkout('floe-root-', { ...LARAVEL, '.env': 'DB_CONNECTION=mysql\nDB_DATABASE=main\n' })
+  const wt = checkout('floe-wt-', {
+    ...LARAVEL,
+    'vendor/laravel/framework/src/Illuminate/Database/Console/Migrations/MigrateCommand.php':
+      '<?php // protected function createMissingMySqlOrPgsqlDatabase($connection)\n'
+  })
+
+  const events = await provision(root, wt)
+
+  assert.equal(status(events, 'migrate'), 'done')
+  assert.equal(sqlCall('CREATE DATABASE'), undefined)
+  assert.match(logOf(events, 'migrate'), /migrate creates the database if it is missing/)
+  assert.ok(line("'php' 'artisan' 'migrate' '--force'"))
 })
 
 test('a sqlite project migrates without creating a database first', async () => {
@@ -757,7 +912,7 @@ test('a sqlite project migrates without creating a database first', async () => 
   const events = await provision(root, wt)
 
   assert.equal(status(events, 'migrate'), 'done')
-  assert.equal(call('CREATE DATABASE'), undefined)
+  assert.equal(sqlCall('CREATE DATABASE'), undefined)
   assert.equal(line("'php' 'artisan' 'migrate' '--force'"), "'php' 'artisan' 'migrate' '--force'")
 })
 
@@ -1121,13 +1276,14 @@ test('a MySQL worktree database is dropped with the password off the command lin
   const logged: string[] = []
 
   assert.equal(await dropWorktreeDatabase(wt, main, (t) => logged.push(t)), 'dropped')
-  const drop = call('DROP DATABASE')
+  const drop = sqlCall('DROP DATABASE')
   assert.ok(drop)
-  assert.equal(
-    drop.args.at(-1),
-    "'mysql' '--protocol=TCP' '--host=db.internal' '--port=3307' '--user=floe' '-e' 'DROP DATABASE IF EXISTS `app_feat_one`'"
+  assert.equal(drop.env.FLOE_DB_SQL, 'DROP DATABASE IF EXISTS `app_feat_one`')
+  assert.deepEqual(
+    [drop.env.FLOE_DB_DSN, drop.env.FLOE_DB_USER, drop.env.FLOE_DB_PASSWORD],
+    ['mysql:host=db.internal;port=3307', 'floe', 'secret']
   )
-  assert.equal(drop.env.MYSQL_PWD, 'secret')
+  assert.equal(drop.args.at(-1)?.includes('secret'), false)
   assert.match(logged.join(''), /Dropping database `app_feat_one`/)
 })
 
@@ -1137,13 +1293,15 @@ test('a Postgres worktree database is dropped from the maintenance database', as
   const wt = checkout('floe-wt-', { '.env': 'DB_CONNECTION=pgsql\nDB_DATABASE=app_feat_one\nDB_PASSWORD=pw\n' })
 
   assert.equal(await dropWorktreeDatabase(wt, main, () => {}), 'dropped')
-  const drop = call('DROP DATABASE')
+  // Through PDO, not a host `psql` (Takeout's Postgres has no client on the host).
+  const drop = sqlCall('DROP DATABASE')
   assert.ok(drop)
-  assert.equal(
-    drop.args.at(-1),
-    `'psql' '--host=127.0.0.1' '--port=5432' '--username=postgres' '--dbname=postgres' '--no-password' '-c' 'DROP DATABASE IF EXISTS "app_feat_one" WITH (FORCE)'`
+  assert.equal(drop.env.FLOE_DB_SQL, 'DROP DATABASE IF EXISTS "app_feat_one" WITH (FORCE)')
+  assert.deepEqual(
+    [drop.env.FLOE_DB_DSN, drop.env.FLOE_DB_USER, drop.env.FLOE_DB_PASSWORD],
+    ['pgsql:host=127.0.0.1;port=5432;dbname=postgres', 'postgres', 'pw']
   )
-  assert.equal(drop.env.PGPASSWORD, 'pw')
+  assert.equal(call("'psql'"), undefined)
 })
 
 test('the main checkout database is never dropped', async () => {
@@ -1177,7 +1335,7 @@ test('a failed drop is raised, not swallowed', async () => {
   const main = checkout('floe-root-', {})
   const wt = checkout('floe-wt-', { '.env': 'DB_CONNECTION=mysql\nDB_DATABASE=app_feat_one\n' })
 
-  await assert.rejects(dropWorktreeDatabase(wt, main, () => {}), /mysql exited with code 1/)
+  await assert.rejects(dropWorktreeDatabase(wt, main, () => {}), /php exited with code 1/)
 })
 
 // ── container teardown ───────────────────────────────────────────────────────

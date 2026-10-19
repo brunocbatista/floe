@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { installHook } from './hook.test-helper.ts'
+import type { ContainerEnv } from './projectStore.ts'
 
 process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), 'floe-cfg-'))
 installHook()
@@ -44,7 +45,7 @@ test('boot moves settings, commands, MCP servers and skills into the repo', () =
 
   const project = store.scanProjects().projects[0]
   assert.equal(project.group, 'Work', 'identity stays in ~/.config')
-  assert.equal(project.env?.php, '8.3')
+  assert.equal((project.env as ContainerEnv).php, '8.3')
   assert.equal(project.jiraProject, 'APP')
   assert.equal(project.seeded, true)
   const global = readFileSync(join(dir, 'config.toml'), 'utf8')

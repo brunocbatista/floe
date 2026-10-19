@@ -227,6 +227,21 @@ vim = false
 
 
 # ------------------------------------------------------------------------------
+# | Worktrees
+# ------------------------------------------------------------------------------
+# |
+# | \`lowercase\` folds the name of a new worktree's branch to lowercase. Off by
+# | default, so a name keeps the capitals you typed — \`FLOE-123\` stays
+# | \`FLOE-123\`. Spaces and punctuation are turned into hyphens either way, and
+# | an existing branch is always taken exactly as it is.
+# |
+# ------------------------------------------------------------------------------
+
+[worktree]
+lowercase = false
+
+
+# ------------------------------------------------------------------------------
 # | Editor
 # ------------------------------------------------------------------------------
 # |
@@ -266,6 +281,30 @@ command = "nvim"
 
 [sandbox]
 enabled = true
+
+
+# ------------------------------------------------------------------------------
+# | Environment
+# ------------------------------------------------------------------------------
+# |
+# | \`local-server\` is what links a Laravel worktree's
+# | \`<project>-<branch>.test\` site on THIS machine: \`herd\` (default) or
+# | \`valet\`. It is a per-machine choice, so two
+# | people on one repo can use different tools — which is why it is not in the
+# | repo's own .floe/config.toml.
+# |
+# | With Valet, Takeout can supply the services:
+# | \`takeout enable mysql redis meilisearch mailpit\`. Floe does not run Takeout;
+# | the database credentials still come from the project's .env. Run
+# | \`valet trust\` once so Floe can link sites without a password prompt.
+# |
+# | A project that sets \`[env] mode = "herd" | "valet" | "container"\` in its
+# | .floe/config.toml overrides this for that project.
+# |
+# ------------------------------------------------------------------------------
+
+[environment]
+local-server = "herd"
 
 
 # ------------------------------------------------------------------------------
@@ -477,10 +516,23 @@ export const REPO_PROJECT_TOML = `# ============================================
 # | Containerized Environment
 # ------------------------------------------------------------------------------
 # |
-# | Optional. It only carries what can't be inferred reliably — the PHP version
-# | above all, which is the reason to containerize at all. \`package-manager\` and
-# | \`db\` have defaults inferred from the lockfile and the .env, but can be pinned
-# | here. \`db-admin\` surfaces DBGate from the shared support stack.
+# | Optional. \`mode\` picks where the project runs:
+# |
+# |   (no block)  the host, linked with whatever \`[environment] local-server\`
+# |               says in the machine's floe.toml (Herd unless changed)
+# |   "herd"      the host, linked with Herd — for everyone who opens this repo
+# |   "valet"     the host, linked with Valet — for everyone who opens this repo
+# |   "container" a Docker container per worktree (the keys below)
+# |
+# | Prefer the machine setting for herd / valet: this file is committed, so a
+# | value here overrides every teammate's own choice. "herd" and "valet" take no
+# | other keys; any container key is ignored there.
+# |
+# | The container mode only carries what can't be inferred reliably — the PHP
+# | version above all, which is the reason to containerize at all.
+# | \`package-manager\` and \`db\` have defaults inferred from the lockfile and the
+# | .env, but can be pinned here. \`db-admin\` surfaces DBGate from the shared
+# | support stack.
 # |
 # | Delete this whole block to run the project on the host instead.
 # |

@@ -9,6 +9,7 @@
 // default and lands in `errors`, which Settings shows. That is the whole reason
 // the app can let agents edit this file.
 
+import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { configDir } from '../dataDir'
@@ -20,6 +21,7 @@ import { FLOE_TOML } from './template'
 import {
   CHAT_LAYOUTS,
   DEFAULT_GROUP,
+  HOST_SITE_MODES,
   NOTIFY_SOUNDS,
   PENGUIN_COLORS,
   PENGUIN_HEADS,
@@ -113,8 +115,11 @@ export interface FloeConfig {
   terminal: { shell?: string }
   /** The message box: vim motions on or off. */
   composer: { vim: boolean }
+  worktree: { lowercase: boolean }
   editor: { command: string }
   sandbox: { enabled: boolean }
+  /** What links a host-native worktree's `.test` site on THIS machine. */
+  environment: { localServer: (typeof HOST_SITE_MODES)[number] }
   notifications: { sound: (typeof NOTIFY_SOUNDS)[number] }
   update: { checkIntervalHours: number }
   /** `hosts`: machines Add project offers, typed as `host@path` (docs in the template). */
@@ -167,8 +172,10 @@ export const DEFAULTS: FloeConfig = {
   user: { name: undefined },
   terminal: { shell: undefined },
   composer: { vim: false },
+  worktree: { lowercase: false },
   editor: { command: 'nvim' },
   sandbox: { enabled: true },
+  environment: { localServer: 'herd' },
   notifications: { sound: 'chime' },
   update: { checkIntervalHours: 6 },
   projects: { groups: [DEFAULT_GROUP], hosts: [] },
@@ -188,10 +195,44 @@ export const floeConfigPath = (): string => join(configDir(), 'floe.toml')
  * keybindings.ts): a config you can't see is a config you don't know you can
  * change, and the app is meant to be driven from these files.
  */
-export function ensureFloeConfig(): void {
+export function ensureFloeConfig(detect: () => LocalServer = detectLocalServer): void {
   const path = floeConfigPath()
   if (existsSync(path)) return
-  writeTomlFile(path, FLOE_TOML)
+  // Only a fresh file is seeded from the machine — an existing one is the
+  // user's, and is never rewritten.
+  const manager = detect()
+  writeTomlFile(
+    path,
+    manager === 'herd'
+      ? FLOE_TOML
+      : editToml(FLOE_TOML, [{ op: 'set', table: 'environment', key: 'local-server', value: manager }])
+  )
+}
+
+type LocalServer = (typeof HOST_SITE_MODES)[number]
+
+/**
+ * Which local server this machine has: Valet only when it is the only one.
+ * Both installed (or neither) stays Herd — the default, and what the app did
+ * before the choice existed.
+ */
+export const pickLocalServer = (found: string[]): LocalServer =>
+  found.includes('valet') && !found.includes('herd') ? 'valet' : 'herd'
+
+// Asked of the login shell, as provisioning does: a GUI launch has a minimal
+// PATH and would report both as missing. Bounded, since it runs on the boot path.
+function detectLocalServer(): LocalServer {
+  if (process.platform === 'win32') return 'herd'
+  try {
+    const out = spawnSync(
+      process.env.SHELL || '/bin/zsh',
+      ['-lc', 'command -v herd >/dev/null && echo herd; command -v valet >/dev/null && echo valet'],
+      { encoding: 'utf8', timeout: 5000 }
+    ).stdout
+    return pickLocalServer(String(out ?? '').split('\n').map((l) => l.trim()))
+  } catch {
+    return 'herd'
+  }
 }
 
 /**
@@ -275,8 +316,10 @@ export function parseFloeConfig(raw: string, file: string): FloeConfigResult {
   const user = subTable(sink, raw, root, 'user')
   const terminal = subTable(sink, raw, root, 'terminal')
   const composer = subTable(sink, raw, root, 'composer')
+  const worktree = subTable(sink, raw, root, 'worktree')
   const editor = subTable(sink, raw, root, 'editor')
   const sandbox = subTable(sink, raw, root, 'sandbox')
+  const environment = subTable(sink, raw, root, 'environment')
   const notifications = subTable(sink, raw, root, 'notifications')
   const update = subTable(sink, raw, root, 'update')
   const projects = subTable(sink, raw, root, 'projects')
@@ -332,10 +375,18 @@ export function parseFloeConfig(raw: string, file: string): FloeConfigResult {
       user: { name: user?.optStr('name')?.trim() || undefined },
       terminal: { shell: terminal?.optStr('shell') },
       composer: { vim: composer?.bool('vim', d.composer.vim) ?? d.composer.vim },
+      worktree: {
+        lowercase: worktree?.bool('lowercase', d.worktree.lowercase) ?? d.worktree.lowercase
+      },
       // Not `oneOf`: the known ids are what Settings offers, not the whole set —
       // any editor binary on the machine is a valid answer here.
       editor: { command: editor?.str('command', d.editor.command) ?? d.editor.command },
       sandbox: { enabled: sandbox?.bool('enabled', d.sandbox.enabled) ?? d.sandbox.enabled },
+      environment: {
+        localServer:
+          environment?.oneOf('local-server', HOST_SITE_MODES, d.environment.localServer) ??
+          d.environment.localServer
+      },
       notifications: {
         sound:
           notifications?.oneOf('sound', NOTIFY_SOUNDS, d.notifications.sound) ??
