@@ -214,13 +214,13 @@ function pushCommand(command: McpCommand): void {
   if (win && !win.isDestroyed()) win.webContents.send('mcp:command', command)
 }
 
-// Ask the renderer to run one of its own commands, and don't wait for it: the
-// tool already did the work in main, this is only the repaint. `project.reload`
-// is the one that matters — the sidebar's project list re-reads on nothing
-// else, so a project added over MCP would otherwise not show up until the user
-// asked for it themselves.
-function pushRefresh(commandId: string): void {
-  pushCommand({ kind: 'run_command', callerKey: 'refresh', requestId: randomUUID(), commandId })
+// Tell the renderer to re-read the project list. The tool already did the work
+// in main, this is only the repaint — and the sidebar's project list re-reads on
+// nothing else, so a project added over MCP would otherwise not show up until
+// the user asked for it themselves. Not a `run_command` of `project.reload`:
+// that one is refused unless the projects panel has focus.
+function pushProjectsReload(): void {
+  pushCommand({ kind: 'reload_projects', callerKey: 'refresh' })
 }
 
 // A raw renderer event (`sessions:changed`), for state main changed behind the
@@ -2536,7 +2536,7 @@ function registerProjectTools(server: McpServer, token: string): void {
       try {
         const added = await addProjectByPath(path, group)
         if (added.error) return textResult({ error: added.error })
-        pushRefresh('project.reload')
+        pushProjectsReload()
         return textResult(added)
       } catch (e) {
         return textResult({ error: (e as Error).message })
@@ -2591,7 +2591,7 @@ function registerProjectTools(server: McpServer, token: string): void {
         const found = registeredProject(path)
         if (!found) return textResult({ error: `not a registered project: ${path}` })
         const projects = removeProject(found.path)
-        pushRefresh('project.reload')
+        pushProjectsReload()
         return textResult({ removed: found.path, projects })
       } catch (e) {
         return textResult({ error: (e as Error).message })
@@ -2619,7 +2619,7 @@ function registerProjectTools(server: McpServer, token: string): void {
         if (group !== undefined) projects = setProjectGroup(at, group)
         if (pinned !== undefined) projects = setProjectPinned(at, pinned)
         if (read_only !== undefined) projects = setProjectReadOnly(at, read_only)
-        pushRefresh('project.reload')
+        pushProjectsReload()
         return textResult(projects.find((p) => p.path === at))
       } catch (e) {
         return textResult({ error: (e as Error).message })

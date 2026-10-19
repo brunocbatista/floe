@@ -2674,6 +2674,10 @@ export default function App() {
         if (projects.current?.path !== command.projectPath) enterProject(command.projectPath)
         return
       }
+      case 'reload_projects': {
+        projects.reload()
+        return
+      }
       case 'open_browser': {
         // Into the chat that asked. An agent keeps working after you move to
         // another project, and opening into the lane on screen put its preview

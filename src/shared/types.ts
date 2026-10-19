@@ -324,6 +324,11 @@ export type McpCommand =
   // asks for once the repo is registered. No worktree: the project's own
   // restore picks up where the user left it.
   | { kind: 'select_project'; callerKey: string; projectPath: string }
+  // Re-read the sidebar's project list after a tool changed it in main
+  // (add/update/remove_project). Its own kind rather than a `run_command` of
+  // `project.reload`: that command only runs with the projects panel focused,
+  // and a repaint must not depend on where the user's focus is.
+  | { kind: 'reload_projects'; callerKey: string }
   // Open a plan file in the reader panel, rooted at its worktree.
   | { kind: 'open_plan'; callerKey: string; worktreePath: string; relPath: string }
   // Open an .excalidraw scene in the drawing panel, rooted at its worktree —
