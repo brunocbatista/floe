@@ -247,3 +247,11 @@ test('a fresh floe.toml is seeded with the detected manager, and an existing one
   ensureFloeConfig(() => 'herd')
   assert.equal(readFileSync(floeConfigPath(), 'utf8'), seeded)
 })
+
+test('worktree names keep their capitals until [worktree] lowercase is turned on', () => {
+  assert.equal(parseFloeConfig(FLOE_TOML, 'floe.toml').config.worktree.lowercase, false)
+  assert.equal(
+    parseFloeConfig('[worktree]\nlowercase = true\n', 'floe.toml').config.worktree.lowercase,
+    true
+  )
+})
