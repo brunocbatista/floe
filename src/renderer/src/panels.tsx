@@ -964,7 +964,6 @@ export function PanelBody({
     return session ? (
       <NannyPanel
         session={session}
-        project={projects.current?.path}
         menuItems={menuItems}
         firstPrompt={firstPrompt}
         firstChoice={firstChoice}
@@ -989,7 +988,14 @@ export function PanelBody({
   if (kind === 'task')
     return <TaskItem key={sub} root={root ?? projects.current?.path} name={sub} onOpen={onOpen} onCommand={onCommand} />
   if (kind === 'colony')
-    return <ColonyBoard project={projects.current?.path} onOpen={onOpen} onCommand={onCommand} />
+    return (
+      <ColonyBoard
+        project={projects.current?.path}
+        board={worktrees.currentPath ?? projects.current?.path}
+        onOpen={onOpen}
+        onCommand={onCommand}
+      />
+    )
   if (kind === 'active')
     return (
       <ActiveSessionsList
@@ -1655,7 +1661,6 @@ export function useComposerMenu(
  */
 function NannyPanel({
   session,
-  project,
   menuItems,
   firstPrompt,
   firstChoice,
@@ -1664,7 +1669,6 @@ function NannyPanel({
   onEnterWorktree
 }: {
   session: { id: string; worktreePath: string }
-  project?: string
   menuItems?: (trigger: Trigger) => PaletteItem[]
   firstPrompt?: string
   firstChoice?: ModelChoice
@@ -1675,7 +1679,8 @@ function NannyPanel({
 }) {
   return (
     <div className="nanny">
-      <ColonyLog project={project} onEnterWorktree={onEnterWorktree} onOpen={onOpen} />
+      {/* She lives in her board's own tree, so that path is her board. */}
+      <ColonyLog board={session.worktreePath} onEnterWorktree={onEnterWorktree} onOpen={onOpen} />
       <div className="nanny-chat">
         <ChatPanel
           session={session}

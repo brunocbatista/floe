@@ -2203,6 +2203,7 @@ export default function App() {
     panelEl: panelAt,
     rowsOf,
     project: projects.current?.path,
+    board: worktrees.currentPath ?? projects.current?.path,
     openChat: (session, firstPrompt) => setLane((l) => open(l, mkPanel('chat', undefined, session, firstPrompt))),
     openTaskChat: (task, session, firstPrompt) =>
       setLane((l) =>
