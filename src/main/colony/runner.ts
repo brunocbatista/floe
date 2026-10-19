@@ -283,7 +283,12 @@ export async function releaseTask(win: BrowserWindow, id: string): Promise<Colon
   let branch = task.branch
   let base = task.base
   if (!worktreePath) {
-    base = await forkBase(task)
+    // On the card too, not only thrown: a refusal is read on the board.
+    base = await forkBase(task).catch((err: Error) => {
+      patchTask(id, { warn: `could not release: ${err.message}` })
+      pushBoard(win, boardOf(task))
+      throw err
+    })
     // `<kind>/<name>` — the branch says what the change IS before you read it.
     const worktrees = await createWorktree(task.project, `${task.kind}/${task.name}`, {
       note: task.brief.slice(0, 80),
@@ -317,6 +322,7 @@ export async function releaseTask(win: BrowserWindow, id: string): Promise<Colon
     // exists: cleanup removes the tree, and the merge check outlives it.
     base: base ?? readBase(worktreePath),
     queued: undefined,
+    warn: undefined,
     stage: nextStage(task.project, INBOX) ?? DONE,
     status: 'holding',
     line: undefined

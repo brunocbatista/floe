@@ -1606,6 +1606,7 @@ test('a worktree board forks from the branch checked out there, unless the card 
   const cut = stubs.created.length
   await assert.rejects(() => releaseTask(win, lost.id), /detached HEAD — name a base for "lost"/)
   assert.equal(stubs.created.length, cut)
+  assert.match(getTask(lost.id)?.warn ?? '', /detached HEAD/)
 })
 
 test('each worktree board admits, shows and caps its own cards only', () => {
