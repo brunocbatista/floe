@@ -137,10 +137,10 @@ export interface Project {
   // directory and so "Switch project…" can return there. Terminal-only — git
   // chrome (worktrees/diffs/files) doesn't apply.
   home?: boolean
-  // Containerized dev environment config. When set (mode 'container'),
-  // provisioning brings each worktree up as a Docker container (serversideup PHP
-  // image) wired to the shared support stack instead of the host-native recipe.
-  // Absent = today's host-native behavior (Herd + host PHP/DB). See provision.ts.
+  // Dev environment config. Mode 'container' brings each worktree up as a Docker
+  // container (serversideup PHP image) wired to the shared support stack; mode
+  // 'herd' / 'valet' stay on the host and link the site with that tool.
+  // Absent = host-native with Herd (host PHP/DB). See provision.ts.
   env?: ProjectEnvConfig
 }
 
@@ -175,7 +175,7 @@ export interface PathProbe {
 // Per-project containerized environment. Only the fields you can't reliably infer
 // live here — PHP version above all (the reason to containerize); package manager
 // and DB engine carry sane defaults inferred elsewhere but can be pinned.
-export interface ProjectEnvConfig {
+export interface ContainerEnvConfig {
   mode: 'container'
   runtime: 'laravel'
   php: '8.2' | '8.3' | '8.4' | '8.5'
@@ -185,6 +185,15 @@ export interface ProjectEnvConfig {
   // whether the project wants it surfaced. Defaults on.
   dbAdmin?: boolean
 }
+
+// Host-native modes: the site is linked on the host by Herd or Valet (Valet with
+// Takeout supplying MySQL/Redis/etc.). Nothing else to configure.
+export const HOST_SITE_MODES = ['herd', 'valet'] as const
+export interface HostEnvConfig {
+  mode: (typeof HOST_SITE_MODES)[number]
+}
+
+export type ProjectEnvConfig = ContainerEnvConfig | HostEnvConfig
 
 export interface Worktree {
   branch: string
@@ -1205,12 +1214,12 @@ export interface AgentReplay {
 
 // A worktree comes out of git with only the tracked files — no .env, no
 // vendor/, no node_modules. Provisioning runs the per-stack setup that makes it
-// ready to work (copy .env, install deps, link Herd, start commands) and streams
+// ready to work (copy .env, install deps, link the Herd/Valet site, start commands) and streams
 // each step's progress to the checklist UI.
 export type ProvisionStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped'
 
 export interface ProvisionStep {
-  id: string // 'copy-env' | 'env-vars' | 'composer' | 'herd' | 'node-install' | 'commands' | 'start'
+  id: string // 'copy-env' | 'env-vars' | 'composer' | 'site' | 'node-install' | 'commands' | 'start'
   label: string
   status: ProvisionStatus
   detail?: string // the command being run, or the error message on failure
@@ -1466,8 +1475,8 @@ export interface RemovePreflight {
   message?: string // why ok is false
 }
 
-// Result of unlinking the worktree's Herd site. `unlinked` is false when the
-// step was a safe no-op — no Herd, no Laravel, or nothing linked to begin with.
+// Result of unlinking the worktree's Herd/Valet site. `unlinked` is false when the
+// step was a safe no-op — no Herd/Valet, no Laravel, or nothing linked to begin with.
 export interface UnlinkSiteResult {
   ok: boolean
   unlinked: boolean

@@ -1,4 +1,4 @@
-// Taking a worktree down completely: its processes, its Herd site and database,
+// Taking a worktree down completely: its processes, its Herd/Valet site and database,
 // then the tree itself.
 //
 // Its own module so the colony runner can clean up a merged task without
@@ -7,7 +7,8 @@
 import { stopDev } from './devServer'
 import { killCommandsForWorktree } from './commandRunner'
 import { killTerminalsForWorktree } from './terminal'
-import { dropWorktreeDatabase, unlinkWorktreeSite } from './provision'
+import { dropWorktreeDatabase, hostManager, unlinkWorktreeSite } from './provision'
+import { getProjectEnv } from './projects'
 import { removeWorktree } from './git'
 
 // Everything spawned inside a worktree, stopped — before it is removed. Agent
@@ -27,7 +28,7 @@ export function stopWorktreeProcesses(target: string): void {
 export async function teardownWorktree(root: string, target: string): Promise<void> {
   stopWorktreeProcesses(target)
   const quiet = (): void => undefined
-  await unlinkWorktreeSite(target, quiet).catch(() => undefined)
+  await unlinkWorktreeSite(target, quiet, hostManager(getProjectEnv(root))).catch(() => undefined)
   await dropWorktreeDatabase(target, root, quiet).catch(() => undefined)
   await removeWorktree(root, target)
 }

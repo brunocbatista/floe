@@ -38,7 +38,7 @@ const STEP_IDS: RemoveStepId[] = ['preflight', 'database', 'site', 'worktree', '
 export const REMOVE_STEP_TITLES: Record<RemoveStepId, string> = {
   preflight: 'Inspect worktree',
   database: 'Drop database',
-  site: 'Unlink Herd site',
+  site: 'Unlink site',
   worktree: 'Remove worktree',
   branch: 'Delete branch'
 }
@@ -194,7 +194,7 @@ export function useRemove(deps: {
   }
 
   /**
-   * Undo the Herd site the provisioning linked.
+   * Undo the Herd/Valet site the provisioning linked.
    *
    * Also before the removal, and for the same reason as the database: `herd
    * unlink` reads the site from the directory it runs in. A link left behind
@@ -206,7 +206,7 @@ export function useRemove(deps: {
     step('site', { status: 'running', detail: undefined })
     let res: { ok: boolean; unlinked: boolean; detail?: string; message?: string }
     try {
-      res = await window.floe.remove.unlinkSite(f.worktreePath)
+      res = await window.floe.remove.unlinkSite(f.root, f.worktreePath)
     } catch (e) {
       step('site', { status: 'error', detail: e instanceof Error ? e.message : String(e) })
       return

@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import type { ProjectEnvConfig } from '../shared/types'
+import type { ContainerEnvConfig } from '../shared/types'
 
 // Containerized per-worktree environments. Each worktree gets its own Compose
 // project (`floe-<slug>`) running one serversideup/php app container, joined to
@@ -227,7 +227,7 @@ function selfHosts(slug: string, cfg: SupportConfig): string {
 export function worktreeComposeYaml(
   slug: string,
   worktreePath: string,
-  env: ProjectEnvConfig,
+  env: ContainerEnvConfig,
   cfg: SupportConfig
 ): string {
   const port = worktreePort(slug)
@@ -330,7 +330,7 @@ export default async (configEnv) => {
 export function writeWorktreeCompose(
   slug: string,
   worktreePath: string,
-  env: ProjectEnvConfig
+  env: ContainerEnvConfig
 ): string {
   const cfg = readSupportConfig()
   const path = worktreeComposePath(worktreePath)

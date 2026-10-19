@@ -167,6 +167,7 @@ import type { ProjectSetup } from './useProjectSetup'
 import type { ClaudeSessionMeta, TranscriptItem } from '../../main/claudeSessions'
 import {
   CHAT_LAYOUTS,
+  HOST_SITE_MODES,
   NOTIFY_SOUNDS,
   PENGUIN_COLORS,
   PENGUIN_HEADS,
@@ -7339,6 +7340,20 @@ function SettingsPanel({ onOpen }: { onOpen: OpenFn }) {
           value: config.editor.command,
           options: ['nvim', 'vim', 'helix', 'vscode', 'zed', 'sublime'],
           hint: 'nvim, vim and helix run inside the file panel; the rest open beside the app'
+        }
+      ]
+    },
+    {
+      title: 'Environment',
+      rows: [
+        {
+          kind: 'choice',
+          table: 'environment',
+          key: 'local-server',
+          label: 'Local server',
+          value: config.environment.localServer,
+          options: HOST_SITE_MODES,
+          hint: 'links each worktree’s .test site — this machine only; a project can pin its own'
         }
       ]
     },
