@@ -110,3 +110,6 @@ export const IconUserCircle = make('IconUserCircle', [{"d":"M15 2H9v2H7v6h2V4h6V
 export const IconVideo = make('IconVideo', [{"d":"M2 5h14v4h2V7h2V5h2v14h-2v-2h-2v-2h-2v4H2V5zm2 12h10V7H4v10z"}])
 export const IconWorld = make('IconWorld', [{"d":"M20 3H2v14h8v2H8v2h8v-2h-2v-2h8V3h-2zm-6 12H4V5h16v10h-6z"}])
 export const IconX = make('IconX', [{"d":"M5 5h2v2H5V5zm4 4H7V7h2v2zm2 2H9V9h2v2zm2 0h-2v2H9v2H7v2H5v2h2v-2h2v-2h2v-2h2v2h2v2h2v2h2v-2h-2v-2h-2v-2h-2v-2zm2-2v2h-2V9h2zm2-2v2h-2V7h2zm0 0V5h2v2h-2z"}])
+export const IconPlay = make('IconPlay', [{"d":"M7 5h2v14H7zM9 6h2v12H9zM11 8h2v8h-2zM13 9h2v6h-2zM15 11h2v2h-2z"}])
+export const IconStop = make('IconStop', [{"d":"M6 6h12v12H6z"}])
+export const IconPrompt = make('IconPrompt', [{"d":"M3 6h2v2h2v2h2v2h2v2H9v2H7v2H5v2H3v-2h2v-2h2v-2h2v-2H7v-2H5V8H3zM13 17h8v2h-8z"}])

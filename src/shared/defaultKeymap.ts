@@ -239,7 +239,8 @@ from disk.`,
 are the same letters the file tree uses, on the same principle: they act on the
 row the cursor is on. \`r\` runs it, or restarts it if it is already running, so
 one key answers "run this" whatever state it is in. \`s\` stops it, \`⏎\` opens its
-output beside the list.
+output beside the list. \`R\` and \`S\` (shift) do the same to every command at
+once: run all that are down, stop all that are up or starting.
 
 \`a\` adds one, \`e\` edits the command line, \`d\` deletes it after asking.
 Renaming has no key on purpose: a command's id is the slug of its name, so a
@@ -248,6 +249,8 @@ rename re-keys it and orphans the output of a process that is still running —
     binds: [
       { key: 'r', command: 'command.run', when: 'panel == "commands"' },
       { key: 's', command: 'command.stop', when: 'panel == "commands"' },
+      { key: 'shift+r', command: 'command.runAll', when: 'panel == "commands"' },
+      { key: 'shift+s', command: 'command.stopAll', when: 'panel == "commands"' },
       { key: 'enter', command: 'command.logs', when: 'panel == "commands"' },
       { key: 'a', command: 'command.add', when: 'panel == "commands"' },
       { key: 'e', command: 'command.edit', when: 'panel == "commands"' },

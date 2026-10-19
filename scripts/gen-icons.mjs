@@ -85,6 +85,15 @@ const MAP = {
   X: 'close'
 }
 
+// Drawn here, on the same 24-grid, where Pixelarticons has no fit: its only stop
+// is `debug-stop` (a bug with a square on it), its play is an 8×16 sliver, and
+// it has no shell prompt.
+const CUSTOM = {
+  Play: [{ d: 'M7 5h2v14H7zM9 6h2v12H9zM11 8h2v8h-2zM13 9h2v6h-2zM15 11h2v2h-2z' }],
+  Stop: [{ d: 'M6 6h12v12H6z' }],
+  Prompt: [{ d: 'M3 6h2v2h2v2h2v2h2v2H9v2H7v2H5v2H3v-2h2v-2h2v-2h2v-2H7v-2H5V8H3zM13 17h8v2h-8z' }]
+}
+
 const svgDir = join(process.cwd(), 'node_modules', 'pixelarticons', 'svg')
 const paths = (file) => {
   const svg = readFileSync(join(svgDir, `${file}.svg`), 'utf8')
@@ -140,5 +149,8 @@ for (const [name, file] of Object.entries(MAP)) {
   const ps = paths(file)
   body += `export const Icon${name} = make('Icon${name}', ${JSON.stringify(ps.map((p) => (p.rule ? p : { d: p.d })))})\n`
 }
+for (const [name, ps] of Object.entries(CUSTOM)) {
+  body += `export const Icon${name} = make('Icon${name}', ${JSON.stringify(ps)})\n`
+}
 writeFileSync(join(process.cwd(), 'src', 'renderer', 'src', 'icons.tsx'), body)
-console.log(`wrote ${Object.keys(MAP).length} icons`)
+console.log(`wrote ${Object.keys(MAP).length + Object.keys(CUSTOM).length} icons`)

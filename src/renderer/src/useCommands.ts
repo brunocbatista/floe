@@ -166,7 +166,11 @@ export function useCommands(projectPath?: string, worktreePath?: string, branch 
   const stop = useCallback((id: string) => void window.floe.commands.stop(keyOf(id)), [keyOf])
 
   const startAll = useCallback(() => {
-    for (const c of list) if (runs[keyOf(c.id)]?.state !== 'running') start(c.id)
+    // Only what is down: a `starting` or `stopping` command is already on its way.
+    for (const c of list) {
+      const s = runs[keyOf(c.id)]?.state
+      if (s !== 'running' && s !== 'starting' && s !== 'stopping') start(c.id)
+    }
   }, [list, runs, keyOf, start])
 
   // Every write returns the fresh list, so the file on disk and the panel cannot

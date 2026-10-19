@@ -9,6 +9,7 @@ import {
   IconCopy,
   IconDownload,
   IconPlayerPlay,
+  IconPrompt,
   IconFile,
   IconFolder,
   IconFolders,
@@ -478,7 +479,7 @@ export const KINDS = {
   // it sits with `files` and `plans` and for the same reason: left of the thing
   // it opens, or the log lands behind the list.
   commands: {
-    icon: IconPlayerPlay,
+    icon: IconPrompt,
     title: 'commands',
     width: 300,
     min: 240,
