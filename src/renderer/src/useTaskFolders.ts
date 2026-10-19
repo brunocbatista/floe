@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { TaskFolder, TaskFolderDetail } from '../../shared/taskFolders'
-import { reason } from './ipcError'
+import type { TaskFolder, TaskFolderDetail } from '../../shared/taskFolders.ts'
+import { reason } from './ipcError.ts'
 
 /**
  * Re-read when anything that changes a task happens: the folders' own watcher

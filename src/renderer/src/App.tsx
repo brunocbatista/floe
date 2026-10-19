@@ -524,7 +524,7 @@ export default function App() {
   // `here`, not the sidebar's selection: at the launcher nothing is selected
   // yet, and a `#` menu that offered sessions but no files was reading a
   // worktree the app already knew how to name.
-  const menuItems = useMenuItems(here, worktrees)
+  const menuItems = useMenuItems(here, worktrees, projects.current?.path)
   // After a turn ends, adopt Claude's auto-generated title (or a Haiku-written
   // one for headless runs) so a session stops reading "Session N". The main
   // process only applies it while the title is still a placeholder and the

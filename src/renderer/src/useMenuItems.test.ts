@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { folderMentions, sessionMentions } from './useMenuItems.ts'
+import { folderMentions, sessionMentions, taskMentions } from './useMenuItems.ts'
+import type { TaskFolder } from '../../shared/taskFolders.ts'
 import type { WorktreeRow } from './useWorktrees.ts'
 
 const row = (branch: string, titles: string[]): WorktreeRow =>
@@ -36,4 +37,11 @@ test('every folder above a file is one row, with a trailing slash', () => {
     folderMentions(['src/main/a.ts', 'src/main/b.ts', 'src/renderer/src/c.tsx', 'README.md']).map((m) => m.id),
     ['#src/', '#src/main/', '#src/renderer/', '#src/renderer/src/']
   )
+})
+
+test('a task is offered by its number', () => {
+  const [item] = taskMentions([{ number: '001', title: 'sidebar', status: 'idea' } as TaskFolder])
+  assert.equal(item.id, '#001')
+  assert.equal(item.title, '001 sidebar')
+  assert.equal(item.group, 'tasks')
 })

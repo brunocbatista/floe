@@ -25,6 +25,8 @@ import { runRuntime } from './runtimes'
 import { expandSkills } from '../shared/skills'
 import { expandSessionRefs } from '../shared/sessionRefs'
 import { resolveSessionRef } from './sessionRefs'
+import { expandTaskRefs } from '../shared/taskRefs'
+import { resolveTaskRef } from './taskRefs'
 import { readSkill } from './config/skills'
 import { projectFor } from './config/projectStore'
 import { floeConfig } from './config/floe'
@@ -136,9 +138,13 @@ export function startTurn(
   // Skills first, then the `#session` references — including any the skill's
   // own text turned out to contain, which is the right way round: a skill that
   // names a session means that session.
-  const expanded = expandSessionRefs(
-    expandSkills(prompt, (name) => readSkill(name, projectFor(worktreePath) ?? undefined)),
-    (slug) => resolveSessionRef(slug, worktreePath)
+  // Tasks last: a session titled `001` is the more specific thing to have meant.
+  const expanded = expandTaskRefs(
+    expandSessionRefs(
+      expandSkills(prompt, (name) => readSkill(name, projectFor(worktreePath) ?? undefined)),
+      (slug) => resolveSessionRef(slug, worktreePath)
+    ),
+    (ref) => resolveTaskRef(ref, worktreePath)
   )
   // Anything but Claude runs on the machine's own runtime and answers over the
   // same agent:event channel.

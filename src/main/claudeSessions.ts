@@ -10,6 +10,7 @@ import { findSpecSummarySource } from './plans'
 import { contextTokens } from '../shared/types'
 import { collapseSkills, hasSkill } from '../shared/skills'
 import { collapseSessionRefs, hasSessionRef } from '../shared/sessionRefs'
+import { collapseTaskRefs, hasTaskRef } from '../shared/taskRefs'
 import { hasPremise, premiseIn, stripPremise } from '../shared/premise'
 import { agentNick } from '../shared/nicks'
 import type { Effort, PermissionMode, ProjectActivity, ProjectActivityStatus } from '../shared/types'
@@ -747,14 +748,15 @@ export function parsePeerMessage(text: string): { from: string; body: string } |
 /**
  * Undo whatever Floe expanded into this prompt before it was sent.
  *
- * One function because both kinds arrive the same way — echoed back by the
+ * One function because every kind arrives the same way — echoed back by the
  * harness in its own log — and a reader that knew about one of them would print
- * the other as raw markup.
+ * the others as raw markup.
  */
 export function collapseFloe(text: string): string {
   let out = text
   if (hasSkill(out)) out = collapseSkills(out)
   if (hasSessionRef(out)) out = collapseSessionRefs(out)
+  if (hasTaskRef(out)) out = collapseTaskRefs(out)
   return out
 }
 

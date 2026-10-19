@@ -6,6 +6,8 @@ import type { Skill } from '../../main/config/skills.ts'
 // The slug rule is shared with main, which resolves it back to the session:
 // two spellings of the same rule would write tokens that name nothing.
 import { sessionSlug } from '../../shared/sessionRefs.ts'
+import type { TaskFolder } from '../../shared/taskFolders.ts'
+import { useTaskFolders } from './useTaskFolders.ts'
 
 /**
  * Every session in the project, named the way the menu shows them — one row per
@@ -31,6 +33,14 @@ export function sessionMentions(rows: WorktreeRow[]): PaletteItem[] {
     }
   }
   return out
+}
+
+/**
+ * Every task of the project, as `#001`: the number the tasks panel lists it by.
+ * Main expands it into the folder on the way out — see shared/taskRefs.ts.
+ */
+export function taskMentions(tasks: TaskFolder[]): PaletteItem[] {
+  return tasks.map((t) => ({ id: `#${t.number}`, title: `${t.number} ${t.title}`, detail: t.status, group: 'tasks' }))
 }
 
 /**
@@ -67,11 +77,13 @@ export function folderMentions(files: string[]): PaletteItem[] {
  * skills follow, read from the CLI itself so the list is what that worktree
  * actually has rather than a copy to keep in step.
  *
- * `#` is sessions of the project you are in, then the worktree's folders and files.
+ * `#` is sessions of the project you are in, its tasks, then the worktree's
+ * folders and files.
  */
 export function useMenuItems(
   worktreePath: string | undefined,
-  worktrees: Worktrees
+  worktrees: Worktrees,
+  projectRoot?: string
 ): (trigger: Trigger) => PaletteItem[] {
   const [skills, setSkills] = useState<string[]>([])
   const [floeSkills, setFloeSkills] = useState<Skill[]>([])
@@ -108,6 +120,9 @@ export function useMenuItems(
   }, [worktreePath])
 
   const mentions = useMemo(() => sessionMentions(worktrees.rows), [worktrees.rows])
+  // Tasks live in the project's main checkout, not the worktree you are in.
+  const { tasks } = useTaskFolders(projectRoot)
+  const taskRows = useMemo(() => taskMentions(tasks), [tasks])
 
   // Sessions first: there are a handful of them and hundreds of files, and the
   // fuzzy filter keeps the order it is given.
@@ -154,7 +169,7 @@ export function useMenuItems(
               .filter((name) => !floeSkills.some((s) => s.name === name))
               .map((name) => ({ id: `/${name}`, title: name, detail: 'harness', group: 'harness' }))
           ]
-        : [...mentions, ...paths],
-    [skills, floeSkills, mentions, paths]
+        : [...mentions, ...taskRows, ...paths],
+    [skills, floeSkills, mentions, taskRows, paths]
   )
 }
