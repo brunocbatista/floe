@@ -7303,6 +7303,19 @@ function SettingsPanel({ onOpen }: { onOpen: OpenFn }) {
       ]
     },
     {
+      title: 'Worktrees',
+      rows: [
+        {
+          kind: 'bool',
+          table: 'worktree',
+          key: 'lowercase',
+          label: 'Lowercase branch names',
+          value: config.worktree.lowercase,
+          hint: 'off keeps the capitals you type — FLOE-123 stays FLOE-123; an existing branch is never renamed'
+        }
+      ]
+    },
+    {
       title: 'Terminal',
       rows: [
         {

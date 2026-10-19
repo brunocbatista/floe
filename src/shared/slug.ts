@@ -1,12 +1,12 @@
 // Turn a free-form worktree name (which may contain spaces, capitals, accents
-// or punctuation) into a valid git branch slug. Lowercased by default; accents
-// stripped; any run of non-alphanumeric characters collapsed to a single hyphen,
-// with namespacing slashes preserved (e.g. "My Feature / Sub Task" → "my-feature/sub-task").
-// Pass { preserveCase: true } to keep the original casing — useful for issue keys
-// that are conventionally upper-case (e.g. "feat/DOS-219").
+// or punctuation) into a valid git branch slug. Casing is kept, so issue keys
+// like "FLOE-123" survive; accents stripped; any run of non-alphanumeric
+// characters collapsed to a single hyphen, with namespacing slashes preserved
+// (e.g. "My Feature / Sub Task" → "My-Feature/Sub-Task").
+// Pass { preserveCase: false } to lowercase it.
 // Always yields a usable ref, or '' when nothing usable remains.
 export function slugifyBranch(name: string, opts?: { preserveCase?: boolean }): string {
-  const preserveCase = opts?.preserveCase ?? false
+  const preserveCase = opts?.preserveCase ?? true
   let s = name.normalize('NFKD').replace(/\p{M}/gu, '') // drop combining accents (café → cafe)
   if (!preserveCase) s = s.toLowerCase()
   const allowed = preserveCase ? /[^a-zA-Z0-9/]+/g : /[^a-z0-9/]+/g

@@ -227,6 +227,21 @@ vim = false
 
 
 # ------------------------------------------------------------------------------
+# | Worktrees
+# ------------------------------------------------------------------------------
+# |
+# | \`lowercase\` folds the name of a new worktree's branch to lowercase. Off by
+# | default, so a name keeps the capitals you typed — \`FLOE-123\` stays
+# | \`FLOE-123\`. Spaces and punctuation are turned into hyphens either way, and
+# | an existing branch is always taken exactly as it is.
+# |
+# ------------------------------------------------------------------------------
+
+[worktree]
+lowercase = false
+
+
+# ------------------------------------------------------------------------------
 # | Editor
 # ------------------------------------------------------------------------------
 # |
