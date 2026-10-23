@@ -1,58 +1,63 @@
 // Replayable scrollback for a PTY.
 //
-// The buffer is a raw byte window of a *stateful* protocol, so a naive
-// `(buffer + data).slice(-MAX)` eventually cuts an escape sequence in half. The
-// damaging case is the alternate screen: a long nvim/lazygit session pushes its
-// `\x1b[?1049h` out of the window, so the replay paints the TUI's absolutely
-// positioned frames straight onto the normal screen — the prompt history and
-// leftover editor rows jumbled together that the panel shows after a re-open.
+// A raw byte window cannot be replayed faithfully: programs draw relative to
+// the size the PTY had when they ran. docker compose, apt and every other
+// progress UI redraw their frame with `ESC[nA`, so bytes recorded at 120
+// columns and replayed into a 49-column panel wrap each row in two, the cursor
+// climbs back only half the frame, and every redraw stacks under the last —
+// the jumbled block left behind after an ssh session that ran one.
 //
-// Fix at the source: a TUI's frames are worthless once it exits (the terminal
-// restores the normal screen anyway), so drop each alternate-screen segment from
-// the scrollback when it ends. Nothing to truncate mid-sequence, and the buffer
-// stays small enough that truncation is rare in the first place.
+// So the scrollback is a headless xterm that parses the same bytes and is
+// resized with the PTY. Re-opening serializes its screen: the rendered result,
+// already reflowed to the current width, instead of the history that produced
+// it. Alternate-screen frames need no special case either — a TUI that exited
+// left the normal screen behind, and one still running serializes as such.
 
-export const MAX_BUFFER = 256 * 1024 // ~256 KB of replayable scrollback per terminal
+import headless from '@xterm/headless'
+import serialize from '@xterm/addon-serialize'
+
+const { Terminal } = headless
+const { SerializeAddon } = serialize
+
+// Matches the renderer's xterm, which keeps its default of 1000 lines.
+export const SCROLLBACK_LINES = 1000
 
 export interface Scrollback {
-  buffer: string
-  // Nesting depth of the alternate screen (nvim can launch lazygit) and where in
-  // `buffer` the outermost segment starts.
-  altDepth: number
-  altMark: number
+  term: InstanceType<typeof Terminal>
+  serializer: InstanceType<typeof SerializeAddon>
+  // Chunks written but not parsed yet. xterm parses asynchronously, and these
+  // bytes were already sent live to whichever panel was open — a snapshot taken
+  // now must carry them, or a re-open in that window loses them.
+  unparsed: string[]
 }
 
-export function newScrollback(): Scrollback {
-  return { buffer: '', altDepth: 0, altMark: 0 }
+export function newScrollback(cols: number, rows: number): Scrollback {
+  const term = new Terminal({ cols, rows, scrollback: SCROLLBACK_LINES, allowProposedApi: true })
+  const serializer = new SerializeAddon()
+  term.loadAddon(serializer)
+  return { term, serializer, unparsed: [] }
 }
-
-// 1049 (xterm's save-cursor + alt screen), plus the older 47/1047 spellings.
-const ALT_SCREEN = /\x1b\[\?(?:1049|1047|47)([hl])/g
 
 export function appendScrollback(sb: Scrollback, data: string): void {
-  const base = sb.buffer.length
-  sb.buffer += data
+  sb.unparsed.push(data)
+  sb.term.write(data, () => void sb.unparsed.shift())
+}
 
-  // How much the buffer has shrunk while handling this chunk, so later matches
-  // still map to the right absolute offset.
-  let dropped = 0
-  ALT_SCREEN.lastIndex = 0
-  for (let m = ALT_SCREEN.exec(data); m; m = ALT_SCREEN.exec(data)) {
-    if (m[1] === 'h') {
-      if (sb.altDepth === 0) sb.altMark = base + m.index - dropped
-      sb.altDepth++
-    } else if (sb.altDepth > 0 && --sb.altDepth === 0) {
-      const end = base + m.index + m[0].length - dropped
-      sb.buffer = sb.buffer.slice(0, sb.altMark) + sb.buffer.slice(end)
-      dropped += end - sb.altMark
-    }
-    // A stray leave with no enter (its start scrolled out before we got here) is
-    // ignored: there's nothing to cut.
-  }
+export function resizeScrollback(sb: Scrollback, cols: number, rows: number): void {
+  sb.term.resize(cols, rows)
+}
 
-  if (sb.buffer.length > MAX_BUFFER) {
-    const cut = sb.buffer.length - MAX_BUFFER
-    sb.buffer = sb.buffer.slice(cut)
-    sb.altMark = Math.max(0, sb.altMark - cut)
-  }
+// Whether a TUI (nvim, lazygit) is drawing on the alternate screen.
+export function onAltScreen(sb: Scrollback): boolean {
+  return sb.term.buffer.active.type === 'alternate'
+}
+
+// The screen and its scrollback as bytes that repaint it on a terminal of the
+// current size.
+export function snapshotScrollback(sb: Scrollback): string {
+  return sb.serializer.serialize() + sb.unparsed.join('')
+}
+
+export function disposeScrollback(sb: Scrollback): void {
+  sb.term.dispose()
 }
