@@ -13,11 +13,14 @@
 // it. Alternate-screen frames need no special case either — a TUI that exited
 // left the normal screen behind, and one still running serializes as such.
 
-import headless from '@xterm/headless'
-import serialize from '@xterm/addon-serialize'
+import * as headless from '@xterm/headless'
+import * as serialize from '@xterm/addon-serialize'
 
-const { Terminal } = headless
-const { SerializeAddon } = serialize
+// Both are CJS modules flagged __esModule. Node's ESM loader and the Electron
+// build hand the module over as `default`; esbuild's CJS bundle (the headless
+// daemon) does not, so take `default` when present and the namespace otherwise.
+const { Terminal } = (headless as { default?: typeof headless }).default ?? headless
+const { SerializeAddon } = (serialize as { default?: typeof serialize }).default ?? serialize
 
 // Matches the renderer's xterm, which keeps its default of 1000 lines.
 export const SCROLLBACK_LINES = 1000
