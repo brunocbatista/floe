@@ -2302,9 +2302,11 @@ export default function App() {
       // What is being removed is Floe's record of the project, not the code:
       // say so, because "delete" over a folder full of work reads much worse
       // than what this does.
+      // The machine is named even when it is local: the question has to say
+      // which machine's list the project leaves.
       const confirmRemoval = (project: Project): void => {
         void askConfirm({
-          question: `Remove "${project.name}" from Floe?`,
+          question: `Remove "${project.name}" from Floe on ${backendLabel(backendOf(project))}?`,
           verb: 'Remove project',
           detail: 'the folder stays on disk'
         }).then((yes) => {
@@ -2317,7 +2319,12 @@ export default function App() {
       // read: ask which one, the way `project.move` does.
       setPicker({
         placeholder: 'Remove which project?',
-        items: projects.all.map((p) => ({ id: p.path, title: p.name, detail: p.group })),
+        items: projects.all.map((p) => ({
+          id: p.path,
+          title: p.name,
+          detail: p.group,
+          badge: backendLabel(backendOf(p))
+        })),
         onPick: (path) => {
           const picked = projects.all.find((p) => p.path === path)
           if (picked) confirmRemoval(picked)
