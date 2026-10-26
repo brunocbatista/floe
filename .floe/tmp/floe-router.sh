@@ -11,6 +11,14 @@
 # keyed by the command line: Floe never runs one command twice in a worktree, so
 # a live group under the same file is an orphan from a client that died without
 # the chance to stop it (SIGKILL), and is cleared before the new run.
+# `floe .` / `floe ~/code/app` / `floe --help` is the project command (docs/cli.md),
+# not a container command. The daemon answers it on its loopback port.
+case "$1" in
+	. | .. | /* | ./* | ../* | '~'* | -h | --help | -v | --version)
+		exec node "$HOME/.local/share/floe/cli/floe.mjs" "$@"
+		;;
+esac
+
 compose=
 dir=$(pwd)
 while [ "$dir" != "/" ]; do
