@@ -2319,11 +2319,14 @@ export default function App() {
       // read: ask which one, the way `project.move` does.
       setPicker({
         placeholder: 'Remove which project?',
+        // Same rows as the switch-project list: grouped, and the machine as a
+        // badge wherever it is not local.
         items: projects.all.map((p) => ({
           id: p.path,
           title: p.name,
           detail: p.group,
-          badge: backendLabel(backendOf(p))
+          badge: p.backend && p.backend !== LOCAL ? backendLabel(p.backend) : undefined,
+          group: p.group
         })),
         onPick: (path) => {
           const picked = projects.all.find((p) => p.path === path)

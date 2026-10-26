@@ -1,0 +1,122 @@
+<!doctype html>
+<html data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<title>Floe DMG install window</title>
+<link rel="stylesheet" href="../src/renderer/src/index.css" />
+<style>
+body{ margin:0; background:var(--bg); color:var(--text); font:400 12.5px/1.5 var(--mono); padding:24px 28px 90px; }
+h1{ font-size:14px; font-weight:700; color:var(--text-strong); margin:0 0 4px; }
+h2{ font-size:13px; font-weight:700; color:var(--text-strong); margin:0 0 4px; }
+.lede,.why{ color:var(--dim); font-size:12px; margin:0 0 14px; max-width:96ch; }
+.lede{ margin-bottom:22px; }
+button.theme{ position:fixed; top:14px; right:18px; background:transparent; color:var(--dim); border:1px solid var(--edge); font:inherit; font-size:12px; padding:3px 10px; cursor:pointer; z-index:200; }
+section{ margin-bottom:44px; }
+.pair{ display:flex; gap:28px; flex-wrap:wrap; align-items:flex-start; }
+.cap{ color:var(--faint); font-size:10px; margin:0 0 6px; }
+
+/* Finder window at 1x: 660x400 content, the size the background image is drawn for */
+.win{ width:660px; border:1px solid #3a3d44; border-radius:10px; overflow:hidden; }
+.bar{ height:28px; background:#2b2d31; display:flex; align-items:center; gap:7px; padding:0 10px; color:#c9ccd2; font:600 12px -apple-system,system-ui,sans-serif; }
+.bar i{ width:11px; height:11px; border-radius:50%; display:inline-block; }
+.bar i:nth-child(1){ background:#ff5f57; } .bar i:nth-child(2){ background:#febc2e; } .bar i:nth-child(3){ background:#28c840; }
+.bar span{ margin-left:10px; }
+.win.lightfinder .bar{ background:#e8e8e8; color:#333; }
+.win.lightfinder{ border-color:#c8c8c8; }
+.art{ position:relative; width:660px; height:400px; overflow:hidden; }
+
+/* Finder-drawn items: icons at 128px, label below. Label colour follows the macOS appearance, not the art. */
+.item{ position:absolute; width:150px; display:grid; justify-items:center; gap:6px; transform:translate(-50%,-64px); }
+.item img, .item svg{ width:128px; height:128px; display:block; }
+.item img{ border-radius:22%; }
+.item b{ font:400 12px -apple-system,system-ui,sans-serif; color:#000; }
+
+/* ---- art pieces (these get baked into background.png / background@2x.png) ---- */
+.wm{ position:absolute; font:700 15px/1 var(--mono); letter-spacing:.02em; }
+.tag{ position:absolute; font:400 11px/1 var(--mono); }
+.hint{ position:absolute; left:0; right:0; text-align:center; font:400 11px/1.6 var(--mono); }
+.arrow{ position:absolute; left:260px; top:180px; width:140px; height:40px; }
+
+/* O1 dark, the icon's own gradient */
+.o1{ background:radial-gradient(ellipse 60% 70% at 22% 8%, rgba(255,255,255,.10), transparent 70%), linear-gradient(#1e2129,#0d0e11); }
+.o1 .wm{ color:#f4f6f8; } .o1 .tag{ color:#8f96a4; } .o1 .hint{ color:#8f96a4; }
+.o1 .hint em{ color:#d3956d; font-style:normal; }
+
+/* O2 light, flat white like the light --bg, one hairline */
+.o2{ background:#ffffff; }
+.o2 .wm{ color:#16171b; } .o2 .tag{ color:#7a808c; } .o2 .hint{ color:#7a808c; }
+.o2 .hint em{ color:#a9631f; font-style:normal; }
+.o2 .rule{ position:absolute; left:32px; right:32px; top:56px; border-top:1px solid #e3e5e9; }
+
+/* O3 split: dark brand band on top, light floor where Finder draws the labels */
+.o3{ background:#f4f6f8; }
+.o3 .band{ position:absolute; left:0; right:0; top:0; height:72px; background:linear-gradient(#1e2129,#0d0e11); border-bottom:1px solid #b8764f; }
+.o3 .wm{ color:#f4f6f8; } .o3 .tag{ color:#8f96a4; } .o3 .hint{ color:#7a808c; }
+.o3 .hint em{ color:#a9631f; font-style:normal; }
+</style>
+</head>
+<body>
+<button class="theme" onclick="document.documentElement.dataset.theme = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'">tema</button>
+
+<h1>DMG install window</h1>
+<p class="lede">Today the DMG ships electron-builder's default grey background with a dashed arrow, and no window size, so Finder opens it huge.
+Each option is a 660x400 background image plus fixed icon positions. Finder draws the icons and their labels on top of the art.
+Labels are drawn black: your screenshot shows Finder in dark mode still drawing black labels on the light default background.</p>
+
+<template id="pieces">
+  <div class="item" style="left:170px; top:200px"><img src="../resources/icon.png" alt="" /><b>Floe.app</b></div>
+  <div class="item" style="left:490px; top:200px">
+    <svg viewBox="0 0 128 128"><path d="M10 30a8 8 0 0 1 8-8h32l10 10h50a8 8 0 0 1 8 8v62a8 8 0 0 1-8 8H18a8 8 0 0 1-8-8z" fill="#6aa9e9"/><path d="M10 44h108v58a8 8 0 0 1-8 8H18a8 8 0 0 1-8-8z" fill="#8cc1f5"/><path d="M64 58l-16 32h8l8-17 8 17h8z M50 84h28" stroke="#4b8fd6" stroke-width="5" fill="none" stroke-linejoin="round"/></svg>
+    <b>Applications</b>
+  </div>
+</template>
+
+<section>
+  <h2>O1 dark, the icon's gradient</h2>
+  <p class="why">Strongest identity, the window looks like the app. Black labels on near-black, so this only works if Finder flips label colour on dark art. Needs a real build to confirm.</p>
+  <div class="pair" data-art="o1"></div>
+</section>
+
+<section>
+  <h2>O2 light, flat white</h2>
+  <p class="why">Matches the light theme and the no-shadow rule. Labels always readable. Least identity.</p>
+  <div class="pair" data-art="o2"></div>
+</section>
+
+<section>
+  <h2>O3 split, dark band + light floor</h2>
+  <p class="why">Brand lives in the band, icons and labels sit on #f4f6f8. Identity of O1, readability of O2. Recommended.</p>
+  <div class="pair" data-art="o3"></div>
+</section>
+
+<script>
+const art = {
+  o1: `<div class="wm" style="left:32px;top:30px">floe</div>
+       <div class="tag" style="left:82px;top:33px">agent workbench</div>
+       <svg class="arrow" viewBox="0 0 140 40"><path d="M6 20h120M114 9l13 11-13 11" stroke="#d3956d" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+       <div class="hint" style="top:330px">drag <em>Floe</em> into Applications<br>first launch blocked? System Settings → Privacy &amp; Security → Open Anyway</div>`,
+  o2: `<div class="wm" style="left:32px;top:30px">floe</div>
+       <div class="tag" style="left:82px;top:33px">agent workbench</div>
+       <div class="rule"></div>
+       <svg class="arrow" viewBox="0 0 140 40"><path d="M6 20h120M114 9l13 11-13 11" stroke="#a9631f" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+       <div class="hint" style="top:330px">drag <em>Floe</em> into Applications<br>first launch blocked? System Settings → Privacy &amp; Security → Open Anyway</div>`,
+  o3: `<div class="band"></div>
+       <div class="wm" style="left:32px;top:29px">floe</div>
+       <div class="tag" style="left:82px;top:32px">agent workbench</div>
+       <svg class="arrow" viewBox="0 0 140 40" style="top:190px"><path d="M6 20h120M114 9l13 11-13 11" stroke="#a9631f" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+       <div class="hint" style="top:330px">drag <em>Floe</em> into Applications<br>first launch blocked? System Settings → Privacy &amp; Security → Open Anyway</div>`,
+};
+const pieces = document.getElementById('pieces').innerHTML;
+const top3 = { o1: 200, o2: 200, o3: 210 };
+for (const pair of document.querySelectorAll('[data-art]')) {
+  const k = pair.dataset.art;
+  for (const mode of ['dark']) {
+    const items = pieces.replaceAll('top:200px', `top:${top3[k]}px`);
+    pair.insertAdjacentHTML('beforeend', `<div>
+      <div class="win"><div class="bar"><i></i><i></i><i></i><span>Floe 0.62.1</span></div>
+      <div class="art ${k}">${art[k]}${items}</div></div></div>`);
+  }
+}
+</script>
+</body>
+</html>

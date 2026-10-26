@@ -43,4 +43,4 @@
 seeded = true
 
 [skills]
-favorites = ["deploy"]
+favorites = ["deploy", "fix"]
