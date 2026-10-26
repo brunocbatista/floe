@@ -1867,3 +1867,26 @@ function stopTaskWatcherForTest(conn: Conn): void {
     /* never opened */
   }
 }
+
+// A usage limit refused the turn: the CLI's rate_limit_event says when the
+// window reopens, and the error result is what says the turn died of it.
+test('handleLine: a turn refused by a usage limit schedules the resume and says so', async () => {
+  const { listFollowups, cancelFollowup } = await import('./followups.ts')
+  const conn = fakeConn()
+  const { win, events } = fakeWin()
+  const resetsAt = Math.floor(Date.now() / 1000) + 2 * 3600
+  handleLine(win, 'limited', conn, JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt } }))
+  handleLine(win, 'limited', conn, JSON.stringify({ type: 'result', is_error: true, result: "You've hit your limit" }))
+  const notice = only(events, 'error').map((e) => (e as { message: string }).message)
+  assert.ok(notice.some((m) => /Floe resumes this session in 2h 1m/.test(m)), notice.join(' | '))
+  const resume = listFollowups().find((f) => f.sessionId === 'limited')
+  assert.equal(resume?.fireAt, resetsAt * 1000 + 60_000)
+  cancelFollowup(resume!.id)
+})
+
+test('handleLine: an ordinary error result schedules no resume', async () => {
+  const { listFollowups } = await import('./followups.ts')
+  const { win } = fakeWin()
+  handleLine(win, 'plain', fakeConn(), JSON.stringify({ type: 'result', is_error: true, result: 'Usage credits are required for this model.' }))
+  assert.equal(listFollowups().filter((f) => f.sessionId === 'plain').length, 0)
+})

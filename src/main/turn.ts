@@ -32,6 +32,7 @@ import { projectFor } from './config/projectStore'
 import { floeConfig } from './config/floe'
 import { getCreatedSession, setCreatedSessionChoice } from './sessionStore'
 import { isQueryKey, parentKeyOf } from '../shared/queries'
+import { cancelUsageResume } from './usageResume'
 // Circular with queries.ts (it starts the turns that merge and peek) — safe on
 // the same terms as relay.ts: neither side touches the other at module level.
 import {
@@ -235,6 +236,9 @@ export interface Dispatched {
 
 export function dispatchTurn(d: Dispatch): Dispatched {
   const { win, parentKey, worktreePath, prompt } = d
+  // Somebody took the session back before its usage limit reset: the resume
+  // Floe had scheduled would land on top of whatever they asked for.
+  if (d.origin !== 'followup') cancelUsageResume(parentKey)
   if (!d.route) {
     const options = d.options ?? optionsForSession(parentKey)
     // An unaddressed message is the session's own turn, so whoever takes it IS

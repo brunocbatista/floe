@@ -38,6 +38,7 @@ import { getSystemPrompt } from './appSettings'
 import { emptyMcpConfigFor, mcpConfigFor } from './mcpServer'
 import { mcpRebind } from './mcpHarness'
 import { log } from './log'
+import { claudeLimitText, claudeRejectedReset, scheduleUsageResume } from './usageResume'
 import { addCumulative, claudeRunningUsage } from './usageLedger'
 
 export interface Conn {
@@ -2008,6 +2009,29 @@ function handleUserLine(win: BrowserWindow, key: string, conn: Conn, msg: Record
   for (const block of content as Array<Record<string, unknown>>) handleToolResultBlock(win, key, conn, block)
 }
 
+/** When the window that refused this session's turn reopens, by session key. */
+const rejectedResets = new Map<string, number>()
+
+// The CLI says a usage window refused the call, and when it reopens. Held
+// until the turn's result, which is what says the turn actually died of it.
+function noteRateLimit(key: string, msg: Record<string, unknown>): void {
+  const resetAt = claudeRejectedReset(msg)
+  if (resetAt !== undefined) rejectedResets.set(key, resetAt)
+}
+
+// A turn the usage limit refused: schedule the session's resume and say so
+// in its chat (usageResume.ts). The event's reset time first; the result
+// text ("resets 3pm (Zone)") when the event never came.
+function noteUsageLimit(win: BrowserWindow, key: string, msg: Record<string, unknown>): void {
+  const stamped = rejectedResets.get(key)
+  rejectedResets.delete(key)
+  if (msg.is_error !== true) return
+  const read = claudeLimitText(typeof msg.result === 'string' ? msg.result : '')
+  if (stamped === undefined && !read.hit) return
+  const notice = scheduleUsageResume(key, stamped ?? read.resetAt)
+  if (notice) send(win, key, { kind: 'error', message: notice })
+}
+
 function handleResultLine(win: BrowserWindow, key: string, conn: Conn, msg: Record<string, unknown>): void {
   // What the process has spent so far, for the colony's step report. Before the
   // subagent hold below: a held result still spent what it says it spent.
@@ -2048,6 +2072,7 @@ function handleResultLine(win: BrowserWindow, key: string, conn: Conn, msg: Reco
   if (msg.is_error === true && typeof msg.result === 'string' && msg.result.trim() && msg.result.trim() !== conn.lastAssistantText?.trim()) {
     send(win, key, { kind: 'error', message: msg.result.trim() })
   }
+  noteUsageLimit(win, key, msg)
   log('turn-done', { key, ok: msg.is_error !== true, turnMs: conn.turnStartedAt ? Date.now() - conn.turnStartedAt : 0 })
   send(win, key, { kind: 'done', ok: msg.is_error !== true })
   // Release any send_message(wait) callers with this turn's final assistant text.
@@ -2090,6 +2115,7 @@ export function handleLine(win: BrowserWindow, key: string, conn: Conn, line: st
   if (parentToolUseId && routeSubagentLine(win, key, msg, type, parentToolUseId)) return
 
   if (type === 'tool_progress') return handleToolProgress(win, key, conn, msg)
+  if (type === 'rate_limit_event') return noteRateLimit(key, msg)
   if (type === 'control_request') return handleControlRequest(win, key, conn, msg)
   // The CLI's answer to a request we made (applyLiveMode). Only a refusal is news.
   if (type === 'control_response') {
