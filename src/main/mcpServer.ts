@@ -112,6 +112,15 @@ import {
 import type { Route } from '../shared/mentions'
 import { installEverywhere, installMessage } from './mcpInstall'
 import { log } from './log'
+import {
+  addFollowup,
+  cancelFollowup,
+  listFollowups,
+  restoreFollowups,
+  setFollowupDelivery,
+  stopFollowupTimers,
+  type Followup
+} from './followups'
 import { getClaudeInfo } from './claudeInfo'
 import { startMcpAuth } from './mcpAuth'
 import { existsSync, realpathSync, rmSync } from 'node:fs'
@@ -386,20 +395,10 @@ export function sendOptions(target: CreatedSession, prompt: string, named: Named
 // --- Followups: delegate a delayed send_message to Floe ---------------------
 // An agent that would otherwise `sleep 3m` then poll another session (or itself)
 // registers a followup instead; Floe's own timer fires the send_message so the
-// calling turn can end immediately. In-memory only — a restart drops pending
-// followups.
-interface FollowupEntry {
-  id: string
-  fromToken: string
-  sessionId: string
-  message: string
-  fireAt: number
-  timer: NodeJS.Timeout
-}
+// calling turn can end immediately. Stored and timed in followups.ts, which
+// keeps them across a restart; sending stays here.
 
-const followups = new Map<string, FollowupEntry>()
-
-function deliverFollowup(sessionId: string, message: string): void {
+function deliverFollowup({ sessionId, message }: Followup): void {
   const target = findSessionAny(sessionId)
   const win = getWindow()
   if (!target || !win) return
@@ -419,34 +418,19 @@ function deliverFollowup(sessionId: string, message: string): void {
   })
 }
 
-function scheduleFollowup(fromToken: string, sessionId: string, delayMinutes: number, message: string): string {
-  const id = randomUUID()
-  const fireAt = Date.now() + delayMinutes * 60_000
-  const timer = setTimeout(() => {
-    followups.delete(id)
-    deliverFollowup(sessionId, message)
-  }, delayMinutes * 60_000)
-  followups.set(id, { id, fromToken, sessionId, message, fireAt, timer })
-  return id
-}
-
-function listFollowupsFor(fromToken: string): Array<{ id: string; sessionId: string; message: string; fireInMinutes: number }> {
-  return [...followups.values()]
-    .filter((f) => f.fromToken === fromToken)
+/** Followups this caller registered, and any Floe set on its own session (a usage resume). */
+function listFollowupsFor(
+  fromToken: string
+): Array<{ id: string; sessionId: string; message: string; fireInMinutes: number; kind?: string }> {
+  return listFollowups()
+    .filter((f) => f.fromToken === fromToken || f.sessionId === fromToken)
     .map((f) => ({
       id: f.id,
       sessionId: f.sessionId,
       message: f.message,
-      fireInMinutes: Math.max(0, Math.round((f.fireAt - Date.now()) / 60_000))
+      fireInMinutes: Math.max(0, Math.round((f.fireAt - Date.now()) / 60_000)),
+      kind: f.kind
     }))
-}
-
-function cancelFollowupById(id: string): boolean {
-  const entry = followups.get(id)
-  if (!entry) return false
-  clearTimeout(entry.timer)
-  followups.delete(id)
-  return true
 }
 
 function textResult(value: unknown): { content: Array<{ type: 'text'; text: string }> } {
@@ -1370,12 +1354,12 @@ function registerSessionControlTools(server: McpServer, token: string): void {
     },
     async ({ session_id, delay_minutes, message }) => {
       const targetId = session_id ?? token
-      const id = scheduleFollowup(token, targetId, delay_minutes, message)
+      const { id } = addFollowup({ fromToken: token, sessionId: targetId, message, fireAt: Date.now() + delay_minutes * 60_000 })
       return textResult({ id, sessionId: targetId, fireInMinutes: delay_minutes })
     }
   )
 
-  server.tool('list_followups', "List this session's pending followups (created via create_followup).", {}, async () => {
+  server.tool('list_followups', "List this session's pending followups: the ones it created, and the resume Floe schedules on it after a usage limit (kind `usage-resume`).", {}, async () => {
     return textResult(listFollowupsFor(token))
   })
 
@@ -1384,7 +1368,7 @@ function registerSessionControlTools(server: McpServer, token: string): void {
     'Cancel a pending followup by id (from create_followup/list_followups).',
     { id: z.string().describe('The followup id.') },
     async ({ id }) => {
-      return textResult({ cancelled: cancelFollowupById(id) })
+      return textResult({ cancelled: cancelFollowup(id) })
     }
   )
 }
@@ -3390,6 +3374,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 // mcpConfigFor is there to make a regression loud instead of silent.
 export function startMcpServer(getWindow: () => BrowserWindow | undefined): Promise<void> {
   getWindowRef = getWindow
+  setFollowupDelivery(deliverFollowup)
+  restoreFollowups()
   // Also how a spawn gets the server back when it finds the port at 0 (mcpRebind).
   setMcpRebind(() => startMcpServer(getWindow))
   if (httpServer?.listening) return Promise.resolve()
@@ -3553,8 +3539,7 @@ export function emptyMcpConfigFor(key: string): string {
 }
 
 export function shutdown(): void {
-  for (const f of followups.values()) clearTimeout(f.timer)
-  followups.clear()
+  stopFollowupTimers()
   httpServer?.close()
   httpServer = undefined
   serverPort = 0

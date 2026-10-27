@@ -14,6 +14,7 @@ import { harnessMcp, mcpRebind } from './mcpHarness'
 import { forgetHouseRules, houseRulesFor } from './houseRules'
 import { forgetThreads, rememberThread, threadFor } from './threads'
 import { addUsage, cliRunUsage } from './usageLedger'
+import { isQuotaError, scheduleUsageResume } from './usageResume'
 
 // Running a turn on something other than Claude.
 //
@@ -455,5 +456,8 @@ export async function runRuntime(
       message: auth ? `${runtime} is not signed in — run \`${runtime}\` once in a terminal (${raw})` : `${runtime}: ${raw}`
     })
     emit(win, key, { kind: 'done', ok: false })
+    // Out of quota: try again later rather than sit there (usageResume.ts).
+    const notice = isQuotaError(raw) ? scheduleUsageResume(key) : undefined
+    if (notice) emit(win, key, { kind: 'error', message: notice })
   }
 }

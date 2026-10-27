@@ -3,7 +3,8 @@ import type { BrowserWindow } from 'electron'
 import type { AgentQuestion, ImageAttachment, PermissionMode } from '../shared/types'
 import { dropSettled, sendAgentEvent } from './agent'
 import { codexThreadConfig, mcpRebind } from './mcpHarness'
-import { codexPosture, resolveModel } from './codex'
+import { codexPosture, getCodexUsage, resolveModel } from './codex'
+import { codexFullReset, scheduleUsageResume } from './usageResume'
 import { logTurn } from './runtimeLog'
 import { addCumulative, codexRunningUsage } from './usageLedger'
 import { forgetThreads, rememberThread, threadFor } from './threads'
@@ -254,9 +255,19 @@ const NOTIFICATIONS: Record<string, Notify> = {
     if (running) addCumulative(ctx.key, `codex:${params.threadId}`, running)
   },
   'turn/completed': (ctx, params) => {
-    const turn = params.turn as { status?: string; error?: { message?: string } | null } | undefined
+    const turn = params.turn as
+      | { status?: string; error?: { message?: string; codexErrorInfo?: unknown } | null }
+      | undefined
     finishTurn(ctx, turn?.error?.message ?? undefined)
+    if (turn?.error?.codexErrorInfo === 'usageLimitExceeded') void resumeAfterLimit(ctx)
   }
+}
+
+// Refused for a usage limit. The error does not say when it lifts, the
+// account's windows do: the full one's reset is when to resume (usageResume.ts).
+async function resumeAfterLimit(ctx: TurnCtx): Promise<void> {
+  const notice = scheduleUsageResume(ctx.key, codexFullReset(await getCodexUsage()))
+  if (notice) sendAgentEvent(ctx.win, ctx.key, { kind: 'error', message: notice })
 }
 
 /** Surface a requestUserInput as the same `question` event Claude uses. */

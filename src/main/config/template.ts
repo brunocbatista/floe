@@ -131,6 +131,10 @@ name = ""
 # | falls back to \`system-prompt.md\`, so copying ~/.config/floe brings the
 # | prompt with it. HTML comments in that file are stripped before it is sent.
 # |
+# | \`auto-resume\` picks a session back up once the usage limit that stopped
+# | it resets. Claude and codex say when; opencode and gemini are retried every
+# | 30 minutes. Typing into the session calls the resume off.
+# |
 # ------------------------------------------------------------------------------
 
 [agent]
@@ -139,6 +143,7 @@ effort        = "high"
 provider      = "claude"
 mode          = "ask"
 system-prompt = "system-prompt.md"
+auto-resume   = true
 
 
 # ------------------------------------------------------------------------------

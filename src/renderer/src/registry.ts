@@ -3188,18 +3188,31 @@ export const REGISTRY: Map<string, Command> = new Map(
         id: 'command.runAll',
         title: 'Run every stopped command',
         group: 'Commands',
-        enabled: (c) => c.commands.list.length > 0,
-        unavailable: () => 'this worktree has no commands',
+        enabled: (c) =>
+          c.commands.list.some((x) => {
+            const s = c.commands.runOf(x.id)?.state
+            return s !== 'running' && s !== 'starting' && s !== 'stopping'
+          }),
+        unavailable: (c) => (c.commands.list.length ? 'everything is already running' : 'this worktree has no commands'),
         run: (c) => c.commands.startAll()
       },
       {
         id: 'command.stopAll',
         title: 'Stop every running command',
         group: 'Commands',
-        enabled: (c) => c.commands.list.some((x) => c.commands.runOf(x.id)?.state === 'running'),
+        // `starting` counts: right after a Run all you did not mean is exactly
+        // when this gets pressed, and nothing is `running` yet.
+        enabled: (c) =>
+          c.commands.list.some((x) => {
+            const s = c.commands.runOf(x.id)?.state
+            return s === 'running' || s === 'starting'
+          }),
         unavailable: () => 'nothing running in this worktree',
         run: (c) => {
-          for (const x of c.commands.list) c.commands.stop(x.id)
+          for (const x of c.commands.list) {
+            const s = c.commands.runOf(x.id)?.state
+            if (s === 'running' || s === 'starting') c.commands.stop(x.id)
+          }
         }
       },
       {

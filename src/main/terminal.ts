@@ -4,7 +4,15 @@ import { homedir, userInfo } from 'node:os'
 import { appendFileSync } from 'node:fs'
 import { resolve, relative, isAbsolute, sep } from 'node:path'
 import type { BrowserWindow } from 'electron'
-import { appendScrollback, newScrollback, type Scrollback } from './terminalBuffer'
+import {
+  appendScrollback,
+  disposeScrollback,
+  newScrollback,
+  onAltScreen,
+  resizeScrollback,
+  snapshotScrollback,
+  type Scrollback
+} from './terminalBuffer'
 import { floeConfig } from './config/floe'
 import { currentEditor, editKeys, resolveEditorBin, spawnArgs } from './editors'
 
@@ -151,7 +159,7 @@ export function openTerminal(
 ): string | null {
   const existing = terms.get(id)
   if (existing) {
-    tap(id, 'OPEN-reattach', `${cols}x${rows} scrollback=${existing.scrollback.buffer.length}`)
+    tap(id, 'OPEN-reattach', `${cols}x${rows}`)
     resizeTerminal(id, cols, rows)
     return replay(id, existing)
   }
@@ -166,7 +174,7 @@ export function openTerminal(
     env: { ...process.env, FLOE_WORKTREE: branch, TERM: 'xterm-256color' } as Record<string, string>
   })
 
-  const term: Term = { proc, cwd: dir, scrollback: newScrollback(), pending: '' }
+  const term: Term = { proc, cwd: dir, scrollback: newScrollback(proc.cols, proc.rows), pending: '' }
   terms.set(id, term)
   wire(win, id, term)
   return null
@@ -234,7 +242,7 @@ export function openEditor(
     env: { ...process.env, FLOE_WORKTREE: branch, TERM: 'xterm-256color' } as Record<string, string>
   })
 
-  const term: Term = { proc, cwd: dir, scrollback: newScrollback(), pending: '' }
+  const term: Term = { proc, cwd: dir, scrollback: newScrollback(proc.cols, proc.rows), pending: '' }
   terms.set(id, term)
   wire(win, id, term)
   return null
@@ -292,6 +300,7 @@ function wire(win: BrowserWindow, id: string, term: Term): void {
   term.proc.onExit(({ exitCode }) => {
     if (!terms.has(id)) return // already torn down by an explicit kill
     flushPending(win, id) // don't drop the final bytes before the exit notice
+    disposeScrollback(term.scrollback)
     terms.delete(id)
     send(win, { id, kind: 'exit', code: exitCode })
   })
@@ -304,19 +313,19 @@ function wire(win: BrowserWindow, id: string, term: Term): void {
 // a prompt the replay then pushes down — the duplicated prompt on re-open. A
 // return value can't overtake the replay it belongs to.
 //
-// A program still on the alternate screen (nvim, lazygit) can't be repainted
-// faithfully from a byte window — its frames are absolutely positioned and the
-// window can start mid-frame — so nudge the size to make it redraw itself from
-// scratch. The kernel only raises SIGWINCH when the size actually changes, hence
+// A program still on the alternate screen (nvim, lazygit) laid its frame out for
+// the size it last saw, and a reflowed snapshot of that frame is not its layout
+// at the new one — so nudge the size to make it redraw itself from scratch. The kernel only raises SIGWINCH when the size actually changes, hence
 // the jiggle.
 function replay(id: string, term: Term): string | null {
   const { cols, rows } = term.proc
-  if (term.scrollback.altDepth > 0 && rows > 1) {
+  if (onAltScreen(term.scrollback) && rows > 1) {
     term.proc.resize(cols, rows - 1)
     term.proc.resize(cols, rows)
   }
-  tap(id, 'REPLAY', String(term.scrollback.buffer.length))
-  return term.scrollback.buffer || null
+  const snapshot = snapshotScrollback(term.scrollback)
+  tap(id, 'REPLAY', String(snapshot.length))
+  return snapshot || null
 }
 
 // Send whatever output has accumulated since the last flush as a single message.
@@ -343,6 +352,7 @@ export function resizeTerminal(id: string, cols: number, rows: number): void {
   if (term && cols > 0 && rows > 0) {
     tap(id, 'RESIZE', `${term.proc.cols}x${term.proc.rows} -> ${cols}x${rows}`)
     term.proc.resize(cols, rows)
+    resizeScrollback(term.scrollback, cols, rows)
   }
 }
 
@@ -365,13 +375,17 @@ export function killTerminal(id: string): void {
   const term = terms.get(id)
   if (!term) return
   killTree(term.proc)
+  disposeScrollback(term.scrollback)
   terms.delete(id)
 }
 
 // Tear every shell (and whatever it launched) down — called on quit — so no
 // processes are left orphaned.
 export function killAllTerminals(): void {
-  for (const term of terms.values()) killTree(term.proc, 'SIGKILL')
+  for (const term of terms.values()) {
+    killTree(term.proc, 'SIGKILL')
+    disposeScrollback(term.scrollback)
+  }
   terms.clear()
 }
 

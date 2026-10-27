@@ -1,6 +1,6 @@
 {
   "name": "floe",
-  "version": "0.61.0",
+  "version": "0.63.0",
   "description": "A keyboard-first desktop workspace orchestrating Claude Code across parallel git worktrees.",
   "author": "Rafael Lunardelli",
   "license": "SEE LICENSE IN LICENSE",
@@ -36,8 +36,10 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@xterm/addon-canvas": "^0.7.0",
     "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-serialize": "^0.13.0",
     "@xterm/addon-web-links": "^0.12.0",
     "@xterm/addon-webgl": "^0.18.0",
+    "@xterm/headless": "^5.5.0",
     "@xterm/xterm": "^5.5.0",
     "electron-updater": "^6.8.9",
     "js-yaml": "^4.2.0",

@@ -37,7 +37,8 @@ import {
   pasteRailAt,
   pasteRailBefore,
   pasteRailOf,
-  renumberPasteRails
+  renumberPasteRails,
+  type PastedText
 } from './pastes'
 import { continueList, tokenizeMarkdown } from './markdown'
 import { applyTrigger, refBefore, triggerAt, type Trigger } from './trigger'
@@ -246,7 +247,7 @@ export function Composer({
   // Where ↑/↓ currently sit in the sent-message history: -1 is the live text,
   // 0 the last message sent. `stash` holds what was typed before you left it.
   const at = useRef(-1)
-  const stash = useRef('')
+  const stash = useRef<{ text: string; pastes: PastedText[] }>({ text: '', pastes: [] })
   // Another worktree is another list, so the walk starts over rather than
   // landing on whatever index the last one was left at.
   useEffect(() => {
@@ -819,9 +820,20 @@ export function Composer({
       const next = at.current + (back ? 1 : -1)
       if (next < -1 || next >= list.length) return
       e.preventDefault()
-      if (at.current === -1) stash.current = value
+      if (at.current === -1) stash.current = { text: value, pastes }
       at.current = next
-      const text = next === -1 ? stash.current : list[list.length - 1 - next]
+      // A recalled message brings its pastes back with it, so its rails still
+      // stand for something and it sends the same as it did the first time.
+      const entry = list[list.length - 1 - next]
+      const { text, pastes: held } =
+        next === -1
+          ? stash.current
+          : {
+              text: entry.text,
+              pastes: (entry.pastes ?? []).map((body) => ({ id: crypto.randomUUID(), text: body }))
+            }
+      setPastes(held)
+      setPeek(null)
       onChange(text)
       setCaret(text.length)
       return
@@ -967,7 +979,11 @@ export function Composer({
    * a message to leave with different bookkeeping behind them.
    */
   function submit(): void {
-    pushHistory(value, historyKey)
+    pushHistory(
+      value,
+      historyKey,
+      pastes.map((p) => p.text)
+    )
     at.current = -1
     // The chips go with the message, and only then stop being pending. An
     // empty send is a no-op downstream, so the attachments stay put rather

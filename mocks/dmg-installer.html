@@ -1,0 +1,75 @@
+<!doctype html>
+<html data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<title>Floe installer window</title>
+<link rel="stylesheet" href="../src/renderer/src/index.css" />
+<style>
+body{ margin:0; background:var(--bg); color:var(--text); font:400 12.5px/1.5 var(--mono); padding:24px 28px 90px; }
+h1{ font-size:14px; font-weight:700; color:var(--text-strong); margin:0 0 4px; }
+h2{ font-size:13px; font-weight:700; color:var(--text-strong); margin:28px 0 4px; }
+.lede{ color:var(--dim); margin:0 0 18px; max-width:96ch; }
+button.theme{ position:fixed; top:14px; right:18px; background:transparent; color:var(--dim); border:1px solid var(--edge); font:inherit; font-size:12px; padding:3px 10px; cursor:pointer; z-index:200; }
+.row{ display:flex; gap:32px; flex-wrap:wrap; }
+.win{ width:540px; border:1px solid var(--line); }
+.bar{ height:28px; background:#1f1f1f; display:flex; align-items:center; gap:8px; padding:0 12px; color:#aaa; font-size:12px; }
+.bar i{ width:12px; height:12px; border-radius:50%; display:block; }
+.canvas{ position:relative; width:540px; height:380px; overflow:hidden; }
+.canvas .ico{ position:absolute; top:150px; width:96px; text-align:center; font:400 12px var(--mono); }
+.canvas .ico img,.canvas .ico .fold{ width:84px; height:84px; display:block; margin:0 auto 8px; border-radius:19px; }
+.canvas .l{ left:70px; } .canvas .r{ right:70px; }
+.fold{ background:#555a64; display:grid; place-items:center; color:#ddd; font-size:34px; }
+.arrow{ position:absolute; top:178px; left:230px; width:80px; height:28px; }
+/* O1 dark */
+.o1{ background:radial-gradient(ellipse 70% 60% at 50% 0%, #2a2620 0%, #16171b 70%); color:#e6e6e6; }
+.o1 .mark{ position:absolute; right:-70px; bottom:-90px; width:300px; opacity:.07; }
+.o1 .title{ position:absolute; top:34px; left:0; right:0; text-align:center; }
+.o1 .title b{ display:block; font-size:20px; letter-spacing:.04em; color:#f4f6f8; }
+.o1 .title span{ color:#d3956d; font-size:11px; letter-spacing:.14em; text-transform:uppercase; }
+.o1 .hint{ position:absolute; bottom:22px; left:0; right:0; text-align:center; color:#8f96a4; font-size:11px; }
+.o1 .hint kbd{ color:#d3956d; font:inherit; }
+.o1 .ico{ color:#e6e6e6; }
+/* O2 light */
+.o2{ background:#fff; color:#16171b; border-top:3px solid #a9631f; }
+.o2 .mark{ position:absolute; left:50%; top:-40px; width:200px; margin-left:-100px; opacity:.9; display:none; }
+.o2 .title{ position:absolute; top:34px; left:0; right:0; text-align:center; }
+.o2 .title b{ display:block; font-size:20px; letter-spacing:.04em; }
+.o2 .title span{ color:#a9631f; font-size:11px; letter-spacing:.14em; text-transform:uppercase; }
+.o2 .hint{ position:absolute; bottom:22px; left:0; right:0; text-align:center; color:#6b7280; font-size:11px; }
+.o2 .ico{ color:#16171b; }
+.o2 .fold{ background:#c9ccd2; color:#555; }
+</style>
+</head>
+<body>
+<button class="theme" onclick="document.documentElement.dataset.theme = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'">tema</button>
+<h1>Floe installer window (DMG)</h1>
+<p class="lede">540×380. Today: flat grey, system font, stock arrow. Both options keep the two icons on the same coordinates, only the background art changes. The real background is rendered to a 2x TIFF at build time.</p>
+
+<div class="row">
+<div>
+<h2>O1 dark, glow + penguin watermark (matches the app icon)</h2>
+<div class="win"><div class="bar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i>Floe 0.62.1</div>
+<div class="canvas o1">
+  <img class="mark" src="../resources/icon.svg" alt="">
+  <div class="title"><b>Floe</b><span>drag to install</span></div>
+  <div class="ico l"><img src="../resources/icon.svg" alt="">Floe.app</div>
+  <svg class="arrow" viewBox="0 0 80 28" fill="none" stroke="#d3956d" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 14h72M62 4l12 10-12 10" stroke-dasharray="2 6"/></svg>
+  <div class="ico r"><div class="fold">⌘</div>Applications</div>
+  <div class="hint">Drag <kbd>Floe.app</kbd> onto <kbd>Applications</kbd></div>
+</div></div>
+</div>
+
+<div>
+<h2>O2 light, flat white + accent rule (follows "no shadows, borders only")</h2>
+<div class="win"><div class="bar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i>Floe 0.62.1</div>
+<div class="canvas o2">
+  <div class="title"><b>Floe</b><span>drag to install</span></div>
+  <div class="ico l"><img src="../resources/icon.svg" alt="">Floe.app</div>
+  <svg class="arrow" viewBox="0 0 80 28" fill="none" stroke="#a9631f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 14h72M62 4l12 10-12 10" stroke-dasharray="2 6"/></svg>
+  <div class="ico r"><div class="fold">⌘</div>Applications</div>
+  <div class="hint">Drag Floe.app onto Applications</div>
+</div></div>
+</div>
+</div>
+</body>
+</html>

@@ -1,0 +1,252 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8" />
+<title>Floe — commands pane with seven commands</title>
+<link rel="stylesheet" href="../src/renderer/src/index.css" />
+<style>
+body { margin:0; background:var(--bg); color:var(--text); font-family:var(--mono); font-size:13px; }
+.page { padding:22px 26px 80px; max-width:1400px; }
+h1 { font-size:14px; margin:0 0 4px; }
+h2 { font-size:12px; margin:34px 0 10px; color:var(--text-strong); }
+.intro { color:var(--dim); font-size:11px; line-height:1.6; margin:0 0 10px; max-width:100ch; }
+.diag { margin:0 0 8px; padding:9px 12px; border:1px solid var(--line); background:var(--panel); font-size:11px; line-height:1.75; color:var(--dim); max-width:100ch; }
+.diag b { color:var(--text-strong); }
+.diag code { padding:1px 5px; background:var(--wash-4); color:var(--text-strong); }
+.grid { display:grid; grid-template-columns:repeat(3, 300px) 240px; gap:26px 22px; align-items:start; }
+.lbl { margin:0 0 3px; font-size:12px; color:var(--text-strong); font-weight:700; }
+.sub { margin:0 0 10px; font-size:11px; color:var(--dim); line-height:1.55; min-height:70px; }
+.theme { position:fixed; top:12px; right:16px; padding:4px 10px; border:1px solid var(--edge); background:var(--panel); color:var(--text); font:inherit; font-size:11px; cursor:pointer; z-index:5; }
+.frame { height:470px; display:flex; }
+.frame .panel { height:100%; }
+.panel-body { position:relative; }
+.hbtn { display:flex; color:var(--dim); margin-left:6px; }
+.hgap { flex:1; }
+svg.px { shape-rendering:crispEdges; fill:currentColor; flex:none; }
+
+/* ---------------- shared bits ----------------------------------------------- */
+.k { padding:0 4px; border:1px solid var(--line); color:var(--faint); font-size:10px; line-height:14px; }
+.keys { position:absolute; left:0; right:0; bottom:0; display:flex; flex-wrap:wrap; gap:2px 10px; padding:6px 12px; border-top:1px solid var(--line-soft); color:var(--faint); font-size:10px; }
+.keys b { color:var(--dim); font-weight:400; }
+
+/* ---------------- O0 · today (copied from index.css, unchanged) ------------- */
+.o0 .cmd-acts { grid-column:2; grid-row:2; }
+
+/* ---------------- O1 · two lines, tidied ------------------------------------ */
+.o1 .cmd-row { display:grid; grid-template-columns:1fr auto; gap:0 10px; padding:5px 12px; }
+.o1 .cmd-l1 { grid-column:1; grid-row:1; display:flex; align-items:center; gap:7px; min-width:0; }
+.o1 .cmd-l2 { grid-column:1; grid-row:2; padding-left:13px; color:var(--dim); font-size:11px; min-width:0; }
+.o1 .cmd-acts { grid-column:2; grid-row:1 / span 2; align-self:center; display:flex; gap:4px; }
+.o1 .meta { margin-left:auto; flex:none; color:var(--time-dim); }
+.o1 .meta[data-err] { color:#c07a72; }
+.o1 .scope { flex:none; color:var(--faint); }
+
+/* ---------------- O2 · one line, the cursor row opens ----------------------- */
+.o2 .cmd-row { display:grid; grid-template-columns:10px 1fr auto 24px; align-items:center; gap:0 8px; padding:4px 12px; }
+.o2 .meta { color:var(--time-dim); white-space:nowrap; }
+.o2 .meta[data-err] { color:#c07a72; }
+.o2 .scope { color:var(--faint); margin-left:6px; }
+.o2 .full { grid-column:2 / span 3; color:var(--dim); font-size:11px; line-height:1.45; word-break:break-all; padding:2px 0 3px; display:none; }
+.panel[data-focused] .o2 [data-cursor] .full { display:block; }
+.o2 .one { justify-self:end; }
+
+/* the act chip both new options share */
+.act { display:flex; align-items:center; justify-content:center; width:22px; height:20px; border:1px solid var(--edge); color:var(--dim); cursor:pointer; }
+.act:hover { border-color:var(--dimmer); color:var(--text-strong); }
+.act[data-act='stop'] { color:#c49495; }
+.act[data-act='run'] { color:#93b8a1; }
+:root[data-theme='light'] .act[data-act='stop'] { color:#b1454a; }
+:root[data-theme='light'] .act[data-act='run'] { color:#2f7d52; }
+
+/* header chips: always both, dimmed when there is nothing to do */
+.bar { display:flex; align-items:center; gap:6px; padding:2px 0 8px; color:var(--dim); font-size:11px; }
+.bar .n { margin-right:auto; white-space:nowrap; }
+.o2 { container-type:inline-size; }
+@container (max-width: 230px) { .o2 .chip .w { display:none; } }
+.chip { display:flex; align-items:center; gap:5px; padding:1px 6px 1px 5px; border:1px solid var(--edge); color:var(--dim); cursor:pointer; }
+.chip[aria-disabled='true'] { opacity:.35; cursor:default; }
+.seg { display:flex; border:1px solid var(--edge); }
+.seg .chip { border:0; }
+.seg .chip + .chip { border-left:1px solid var(--edge); }
+.o2 .group-label .gn, .o1 .group-label .gn { color:var(--faint); margin-left:6px; }
+
+/* icon sheet */
+.icons { display:flex; gap:28px; flex-wrap:wrap; font-size:11px; color:var(--dim); }
+.icons .set { display:flex; flex-direction:column; gap:8px; }
+.icons .set b { color:var(--text-strong); font-weight:400; }
+.icons .cell { display:flex; align-items:center; gap:10px; }
+.icons .cell svg { color:var(--text); }
+.icons .bad { color:#c07a72; }
+
+table.keys-t { border-collapse:collapse; font-size:11px; color:var(--dim); }
+table.keys-t td { padding:4px 14px 4px 0; border-bottom:1px solid var(--line-soft); vertical-align:top; }
+table.keys-t td:first-child { color:var(--text-strong); white-space:nowrap; }
+table.keys-t .new { color:var(--accent); }
+</style></head><body>
+<button class="theme" onclick="document.documentElement.dataset.theme = document.documentElement.dataset.theme === 'light' ? '' : 'light'">theme</button>
+<div class="page">
+<h1>Floe — the commands pane with seven commands</h1>
+<p class="intro">Seven commands, every state the pane knows (running, starting, crash-looping, exited 0, never ran, stopping), names from 2 to 25 characters and command lines from 12 to 140. Every pane is focused with the cursor on <code>queue</code>, at the panel's real width (300px default, 240px minimum).</p>
+<div class="diag">
+<b>F1</b> No key for Run all / Stop all. They exist only as palette entries and as mouse chips.<br>
+<b>F2</b> The stop icon is pixelarticons <code>debug-stop</code>: a bug with a square on it. The play glyph is 8×16 on a 24 grid, so at 13px it reads as a sliver, and it doubles as the panel's own icon.<br>
+<b>F3</b> When the name equals the command (your <code>pnpm run dev</code>) line two repeats line one.<br>
+<b>F4</b> Row buttons sit on line two while the scope chip sits on line one, so the row has two right edges. The header chips appear and disappear with state, so <code>Run all</code> jumps sideways.<br>
+<b>F5</b> Stop all ignores <code>starting</code>: it is disabled and hidden while a command is only starting, which is exactly when you press it after a bad Run all.<br>
+<b>F6</b> Seven two-line rows plus two headings need ~400px. On a stacked panel the list scrolls before you see the stopped block.<br>
+<b>F7</b> Today's grid lets a long command line push the row buttons past the panel edge (queue, vite, stripe in O0). <code>.cmd-l2</code> has no <code>min-width: 0</code>, so the <code>1fr</code> column grows to the unwrapped command.
+</div>
+
+<h2>The panes</h2>
+<div class="grid" id="out"></div>
+
+<h2>Icons</h2>
+<div class="icons" id="icons"></div>
+
+<h2>Keys (panel-scoped, like r / s today)</h2>
+<table class="keys-t">
+<tr><td>r</td><td>run, or restart if running (unchanged)</td></tr>
+<tr><td>s</td><td>stop (unchanged)</td></tr>
+<tr><td class="new">shift+r</td><td>run every stopped command. Panel-scoped, so the composer keeps its capital R, the same reasoning colony's <code>shift+&gt;</code> uses.</td></tr>
+<tr><td class="new">shift+s</td><td>stop every running <i>or starting</i> command (fixes F5)</td></tr>
+<tr><td>⏎</td><td>open output (unchanged)</td></tr>
+<tr><td>a / e / d</td><td>add / edit / delete (unchanged)</td></tr>
+</table>
+</div>
+
+<script>
+// pixel glyphs, 24 grid, crispEdges like icons.tsx
+var P = {
+  playNow: 'M10 20H8V4h2v2h2v3h2v2h2v2h-2v2h-2v3h-2v2z',
+  bug:     'M6 2h2v2H6V2Zm10 2h-2v2h-4V4H8v2H6v3H4V7H2v2h2v2h2v2H2v2h4v2H4v2H2v2h2v-2h2v3h8v-2H8V8h8v6h2v-3h2V9h2V7h-2v2h-2V6h-2V4Zm0 0V2h2v2h-2Zm-6 7h4v2h-4v-2Zm4 4h-4v2h4v-2Zm8 1h-6v6h6v-6Z',
+  play:    'M7 5h2v14H7zM9 6h2v12H9zM11 8h2v8h-2zM13 9h2v6h-2zM15 11h2v2h-2z',
+  stop:    'M6 6h12v12H6z',
+  reload:  'M16 2h-2v2h2v2H4v2H2v5h2V8h12v2h-2v2h2v-2h2V8h2V6h-2V4h-2V2zM6 20h2v2h2v-2H8v-2h12v-2h2v-5h-2v5H8v-2h2v-2H8v2H6v2H4v2h2v2z',
+  prompt:  'M3 6h2v2h2v2h2v2h2v2H9v2H7v2H5v2H3v-2h2v-2h2v-2h2v-2H7v-2H5V8H3zM13 17h8v2h-8z',
+  server:  'M3 3h18v18H3V3zm2 2v6h14V5H5zm14 8H5v6h14v-6zM7 7h2v2H7V7zm2 8H7v2h2v-2z',
+  script:  'M6 3h14v2h2v6h-2v8h-2V5H6V3zm8 14v-2H6V5H4v10H2v4h2v2h14v-2h-2v-2h-2zm0 0v2H4v-2h10zM8 7h8v2H8V7zm8 4H8v2h8v-2z',
+  playAll: 'M3 5h2v14H3zM5 7h2v10H5zM7 9h2v6H7zM9 11h2v2H9zM12 5h2v14h-2zM14 7h2v10h-2zM16 9h2v6h-2zM18 11h2v2h-2z',
+  plus:    'M11 4h2v7h7v2h-7v7h-2v-7H4v-2h7V4z',
+  rows:    'M3 4h18v7H3V4zm2 2v3h14V6H5zm-2 7h18v7H3v-7zm2 2v3h14v-3H5z',
+  x:       'M5 5h2v2H5V5zm4 4H7V7h2v2zm2 2H9V9h2v2zm2 0h-2v2H9v2H7v2H5v2h2v-2h2v-2h2v-2h2v2h2v2h2v2h2v-2h-2v-2h-2v-2h-2v-2zm2-2v2h-2V9h2zm2-2v2h-2V7h2zm0 0V5h2v2h-2z'
+};
+function ico(k, s) { s = s || 13; return '<svg class="px" width="'+s+'" height="'+s+'" viewBox="0 0 24 24"><path d="'+P[k]+'"/></svg>'; }
+
+var CMDS = [
+  { name:'dev', cmd:'pnpm run dev', st:'running', mem:'142 MB', up:'12m', scope:'project' },
+  { name:'queue', cmd:'php artisan queue:work redis --queue=high,default,low --tries=3 --timeout=90', st:'running', mem:'88 MB', up:'12m' },
+  { name:'vite', cmd:'pnpm vite --host 0.0.0.0 --port 5173', st:'starting' },
+  { name:'horizon', cmd:'php artisan horizon', st:'crash', note:'crash loop · exit 1 ×5', scope:'project' },
+  { name:'stripe webhooks', cmd:'stripe listen --forward-to https://floe-commands-panel.test/stripe/webhook --events payment_intent.succeeded,customer.subscription.updated', st:'exited', note:'exit 0 · 2h ago · ran 41m' },
+  { name:'pnpm tsc --noEmit --watch', cmd:'pnpm tsc --noEmit --watch', st:'idle' },
+  { name:'db', cmd:'docker compose up mysql redis mailpit', st:'stopping', note:'stopping…' }
+];
+var CUR = 'queue';
+var esc = function (t) { return t.replace(/&/g,'&amp;').replace(/</g,'&lt;'); };
+var live = function (c) { return c.st === 'running' || c.st === 'starting'; };
+var spin = '<span class="spin">⠹</span>';
+var mark = function (c) { return live(c) ? spin : '<span class="dot' + (c.st === 'crash' ? ' dot-err' : '') + '"></span>'; };
+var LIVE = CMDS.filter(live), DOWN = CMDS.filter(function (c) { return !live(c); });
+
+function head(icon) {
+  return '<div class="panel-head"><span class="panel-icon">' + ico(icon, 14) + '</span><span class="panel-name">commands</span><span class="hgap"></span>' +
+    '<span class="hbtn">' + ico('plus') + '</span><span class="hbtn">' + ico('rows') + '</span><span class="hbtn">' + ico('x') + '</span></div>';
+}
+
+/* O0 — today's markup and classes, verbatim */
+function o0() {
+  var state = { starting:'starting', stopping:'stopping' };
+  var row = function (c) {
+    var meta = c.st === 'running' ? c.mem : c.note;
+    var acts = live(c)
+      ? '<span class="cmd-act">' + ico('reload') + '</span><span class="cmd-act">' + ico('bug') + '</span>'
+      : '<span class="cmd-act">' + ico('playNow') + '</span>';
+    return '<button class="row cmd-row"' + (live(c) ? ' data-live' : '') + (c.name === CUR ? ' data-cursor' : '') + '>' +
+      '<span class="cmd-l1">' + mark(c) + '<span class="row-name">' + esc(c.name) + '</span>' +
+      (c.scope ? '<span class="cmd-scope">' + c.scope + '</span>' : '') +
+      (state[c.st] ? '<span class="cmd-state"' + (live(c) ? ' data-run' : '') + '>' + state[c.st] + '</span>' : '') + '</span>' +
+      '<span class="cmd-l2"><span class="cmd-cmd">' + esc(c.cmd) + '</span>' +
+      (meta && c.st !== 'stopping' ? '<span class="cmd-note"' + (c.st === 'crash' ? ' data-err="true"' : '') + '>' + meta + '</span>' : '') + '</span>' +
+      '<span class="cmd-acts">' + acts + '</span></button>';
+  };
+  return head('playNow') + '<div class="panel-body">' +
+    '<div class="changes-head"><span>2/7 running</span><span class="cmd-headacts"><span class="cmd-runall">Stop all</span><span class="cmd-runall">Run all</span></span></div>' +
+    '<div class="group-label">RUNNING</div>' + LIVE.map(row).join('') +
+    '<div class="group-label">STOPPED</div>' + DOWN.map(row).join('') + '</div>';
+}
+
+function metaOf(c) {
+  if (c.st === 'running') return { t: c.mem + ' · ' + c.up };
+  if (c.st === 'starting') return { t: 'starting…' };
+  if (c.st === 'crash') return { t: 'exit 1 ×5', err: 1 };
+  if (c.st === 'exited') return { t: '0 · 2h ago' };
+  if (c.st === 'stopping') return { t: 'stopping…' };
+  return { t: '' };
+}
+function acts(c, two) {
+  if (live(c)) return (two ? '<span class="act" title="restart (r)">' + ico('reload', 12) + '</span>' : '') + '<span class="act" data-act="stop" title="stop (s)">' + ico('stop', 12) + '</span>';
+  if (c.st === 'stopping') return '<span class="act" aria-disabled="true" style="opacity:.35">' + ico('stop', 12) + '</span>';
+  return '<span class="act" data-act="run" title="run (r)">' + ico('play', 12) + '</span>';
+}
+function bar(seg) {
+  var a = '<span class="chip" title="run every stopped command">' + ico('play', 11) + '<span class="w">all</span> <span class="k">⇧R</span></span>';
+  var b = '<span class="chip" title="stop every running command">' + ico('stop', 11) + '<span class="w">all</span> <span class="k">⇧S</span></span>';
+  return '<div class="bar"><span class="n">2/7 running</span>' + (seg ? '<span class="seg">' + a + b + '</span>' : a + b) + '</div>';
+}
+var keyBar = '<div class="keys"><span><b>r</b> run</span><span><b>s</b> stop</span><span><b>⇧R</b> run all</span><span><b>⇧S</b> stop all</span><span><b>⏎</b> output</span></div>';
+
+/* O1 — two lines, tidied */
+function o1() {
+  var row = function (c) {
+    var m = metaOf(c), same = c.cmd === c.name;
+    return '<button class="row cmd-row"' + (live(c) ? ' data-live' : '') + (c.name === CUR ? ' data-cursor' : '') + '>' +
+      '<span class="cmd-l1">' + mark(c) + '<span class="row-name">' + esc(c.name) + '</span>' +
+      (c.scope ? '<span class="scope">project</span>' : '') +
+      (m.t ? '<span class="meta"' + (m.err ? ' data-err' : '') + '>' + m.t + '</span>' : '') + '</span>' +
+      (same ? '' : '<span class="cmd-l2 cmd-cmd">' + esc(c.cmd) + '</span>') +
+      '<span class="cmd-acts">' + acts(c, true) + '</span></button>';
+  };
+  return head('prompt') + '<div class="panel-body o1">' + bar(false) +
+    '<div class="group-label">RUNNING<span class="gn">3</span></div>' + LIVE.map(row).join('') +
+    '<div class="group-label">STOPPED<span class="gn">4</span></div>' + DOWN.map(row).join('') + keyBar + '</div>';
+}
+
+/* O2 — one line per command; the cursor row opens to the full command */
+function o2() {
+  var row = function (c) {
+    var m = metaOf(c);
+    return '<button class="row cmd-row"' + (live(c) ? ' data-live' : '') + (c.name === CUR ? ' data-cursor' : '') + ' title="' + esc(c.cmd) + '">' +
+      mark(c) + '<span class="row-name">' + esc(c.name) + (c.scope ? '<span class="scope">project</span>' : '') + '</span>' +
+      '<span class="meta"' + (m.err ? ' data-err' : '') + '>' + m.t + '</span>' +
+      '<span class="one">' + acts(c, false) + '</span>' +
+      (c.cmd === c.name ? '' : '<span class="full">' + esc(c.cmd) + '</span>') + '</button>';
+  };
+  return '<div class="panel-body o2">' + bar(true) +
+    '<div class="group-label">RUNNING<span class="gn">3</span></div>' + LIVE.map(row).join('') +
+    '<div class="group-label">STOPPED<span class="gn">4</span></div>' + DOWN.map(row).join('') + keyBar + '</div>';
+}
+
+var OPTS = [
+  ['O0 · today', 'Today\'s classes and glyphs, seven commands. Note the bug-shaped stop, the jumping header chips, tsc repeated on line two, and the row buttons sitting on line two only.', o0(), 300],
+  ['O1 · two lines, tidied', 'Same shape as today. Meta (memory · uptime, or how it ended) moves up to line one, so line two is the whole command and nothing else. Line two is dropped when it equals the name. One action column spanning both lines. Header chips are always drawn, with their keys on them. Key bar at the foot.', o1(), 300],
+  ['O2 · one line (recommended)', 'One line per command, so seven fit with room to spare. The cursor row unfolds to the full command line, wrapped, never truncated. One toggle per row (▶ or ■), restart stays on the r key. Seven rows take ~230px instead of ~400px.', head('prompt') + o2(), 300],
+  ['O2 at 240px (panel minimum)', 'Names truncate, meta and the toggle keep their column. The open cursor row wraps the long queue command over three lines.', head('prompt') + o2(), 240]
+];
+document.getElementById('out').innerHTML = OPTS.map(function (o) {
+  return '<div style="width:' + o[3] + 'px"><p class="lbl">' + o[0] + '</p><p class="sub">' + o[1] + '</p>' +
+    '<div class="frame"><div class="panel" data-focused data-kind="commands">' + o[2] + '</div></div></div>';
+}).join('');
+
+var I = [
+  ['panel icon', [['playNow','today: play, 8×16 sliver'],['prompt','>_ prompt (recommended)'],['server','server'],['script','script']]],
+  ['row actions', [['bug','today: stop = debug-stop (a bug)', 1],['stop','stop: plain square'],['play','run: wider play, 10×14'],['reload','restart: reload (unchanged)']]],
+  ['header', [['playAll','run all, if a glyph is wanted over "▶ all"']]]
+];
+document.getElementById('icons').innerHTML = I.map(function (s) {
+  return '<div class="set"><b>' + s[0] + '</b>' + s[1].map(function (c) {
+    return '<span class="cell"' + (c[2] ? ' class="bad"' : '') + '>' + ico(c[0], 16) + ico(c[0], 13) + '<span' + (c[2] ? ' class="bad"' : '') + '>' + c[1] + '</span></span>';
+  }).join('') + '</div>';
+}).join('');
+
+// spin like the app does: one clock, every spinner in phase
+var F = '⠋⠙⠹⠸⠼⠴⠦⠧', f = 0;
+setInterval(function () { f = (f + 1) % F.length; document.querySelectorAll('.spin').forEach(function (s) { s.textContent = F[f]; }); }, 90);
+</script>
+</body></html>

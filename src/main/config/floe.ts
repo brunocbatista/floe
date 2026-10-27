@@ -83,6 +83,8 @@ export interface FloeConfig {
     provider: (typeof PROVIDERS)[number]
     mode: (typeof MODES)[number]
     systemPromptFile: string
+    /** Resume a session by itself once the usage limit that stopped it resets (usageResume.ts). */
+    autoResume: boolean
   }
   /**
    * What each harness answers with when the message names it but not a model —
@@ -161,7 +163,8 @@ export const DEFAULTS: FloeConfig = {
     effort: 'high',
     provider: 'claude',
     mode: 'ask',
-    systemPromptFile: 'system-prompt.md'
+    systemPromptFile: 'system-prompt.md',
+    autoResume: true
   },
   // Empty, not one entry per harness: a harness with nothing set here is not
   // the same as one set to "" — it means nobody has answered the question.
@@ -298,6 +301,20 @@ function readHarnesses(
   return out
 }
 
+/** `[agent]`. Its own unit so parseFloeConfig stays under the CRAP limit. */
+function readAgent(agent: TableReader | null): FloeConfig['agent'] {
+  const d = DEFAULTS.agent
+  if (!agent) return d
+  return {
+    model: agent.oneOf('model', MODELS, d.model),
+    effort: agent.oneOf('effort', EFFORTS, d.effort),
+    provider: agent.oneOf('provider', PROVIDERS, d.provider),
+    mode: agent.oneOf('mode', MODES, d.mode),
+    systemPromptFile: agent.str('system-prompt', d.systemPromptFile),
+    autoResume: agent.bool('auto-resume', d.autoResume)
+  }
+}
+
 /** Parse and validate the file. Missing file means defaults, not an error. */
 export function parseFloeConfig(raw: string, file: string): FloeConfigResult {
   const sink = new ErrorSink(file, raw)
@@ -351,13 +368,7 @@ export function parseFloeConfig(raw: string, file: string): FloeConfigResult {
           d.appearance.transparencyAmount,
         keyHints: appearance?.bool('key-hints', d.appearance.keyHints) ?? d.appearance.keyHints
       },
-      agent: {
-        model: agent?.oneOf('model', MODELS, d.agent.model) ?? d.agent.model,
-        effort: agent?.oneOf('effort', EFFORTS, d.agent.effort) ?? d.agent.effort,
-        provider: agent?.oneOf('provider', PROVIDERS, d.agent.provider) ?? d.agent.provider,
-        mode: agent?.oneOf('mode', MODES, d.agent.mode) ?? d.agent.mode,
-        systemPromptFile: agent?.str('system-prompt', d.agent.systemPromptFile) ?? d.agent.systemPromptFile
-      },
+      agent: readAgent(agent),
       harness,
       premise: {
         enabled: premise?.bool('enabled', d.premise.enabled) ?? d.premise.enabled,

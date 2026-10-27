@@ -13,13 +13,33 @@ const KEY = 'floe.history'
 const MAX = 100
 const MAX_SCOPES = 40
 
-type Histories = Record<string, string[]>
+/**
+ * One sent message as the composer had it: the text with its paste rails, and
+ * the pastes those rails stand for. Without the bodies a recalled message is
+ * only the rails, and sending it again would send the rails (pastes.ts).
+ */
+export type Entry = { text: string; pastes?: string[] }
+
+type Histories = Record<string, Entry[]>
+
+const toEntry = (v: unknown): Entry | null => {
+  if (typeof v === 'string') return { text: v }
+  if (!v || typeof v !== 'object') return null
+  const { text, pastes } = v as { text?: unknown; pastes?: unknown }
+  if (typeof text !== 'string') return null
+  const bodies = Array.isArray(pastes) ? pastes.filter((p): p is string => typeof p === 'string') : []
+  return bodies.length ? { text, pastes: bodies } : { text }
+}
+
+const same = (a: Entry | undefined, b: Entry): boolean =>
+  !!a && a.text === b.text && (a.pastes ?? []).join('\0') === (b.pastes ?? []).join('\0')
 
 /**
  * Every list, by worktree path.
  *
  * The pre-scope shape was a flat array of strings; it is dropped on sight
- * rather than migrated, because there is no worktree to file it under.
+ * rather than migrated, because there is no worktree to file it under. Entries
+ * written before pastes were kept are plain strings, read as text alone.
  */
 function read(): Histories {
   try {
@@ -28,7 +48,7 @@ function read(): Histories {
     return Object.fromEntries(
       Object.entries(parsed as Record<string, unknown>)
         .filter(([, v]) => Array.isArray(v))
-        .map(([k, v]) => [k, (v as unknown[]).filter((s): s is string => typeof s === 'string')])
+        .map(([k, v]) => [k, (v as unknown[]).map(toEntry).filter((e): e is Entry => !!e)])
     )
   } catch {
     return {}
@@ -42,23 +62,24 @@ function read(): Histories {
  * is nowhere to file the text, and picking somewhere would hand it to whichever
  * composer opened next.
  */
-export function readHistory(scope?: string): string[] {
+export function readHistory(scope?: string): Entry[] {
   if (!scope) return []
   return read()[scope] ?? []
 }
 
 /** Append, oldest first. Exported for the test; `pushHistory` is the real door. */
-export function push(list: string[], text: string): string[] {
-  const entry = text.trim()
+export function push(list: Entry[], text: string, pastes: string[] = []): Entry[] {
+  const trimmed = text.trim()
+  const entry: Entry = pastes.length ? { text: trimmed, pastes } : { text: trimmed }
   // Nothing to recall in an empty message, and repeating the last one only
   // makes you press ↑ twice to get past it.
-  if (!entry || entry === list[list.length - 1]) return list
+  if (!trimmed || same(list[list.length - 1], entry)) return list
   return [...list, entry].slice(-MAX)
 }
 
 /** Append to one worktree's list. Exported for the test; `pushHistory` is the real door. */
-export function put(all: Histories, scope: string, text: string): Histories {
-  const list = push(all[scope] ?? [], text)
+export function put(all: Histories, scope: string, text: string, pastes: string[] = []): Histories {
+  const list = push(all[scope] ?? [], text, pastes)
   // Nothing was added — don't write, and don't let a blank ⏎ count as touching
   // this worktree.
   if (!list.length || list === all[scope]) return all
@@ -71,11 +92,32 @@ export function put(all: Histories, scope: string, text: string): Histories {
   return { ...rest, [scope]: list }
 }
 
-export function pushHistory(text: string, scope?: string): void {
+/**
+ * Drop the paste bodies of the oldest entry still holding any, so a full
+ * localStorage gives up old pastes before it gives up the whole history.
+ * Exported for the test. Returns null when there is nothing left to drop.
+ */
+export function shed(all: Histories): Histories | null {
+  for (const [scope, list] of Object.entries(all)) {
+    const i = list.findIndex((e) => e.pastes?.length)
+    if (i < 0) continue
+    const next = [...list]
+    next[i] = { text: list[i].text }
+    return { ...all, [scope]: next }
+  }
+  return null
+}
+
+export function pushHistory(text: string, scope?: string, pastes: string[] = []): void {
   if (!scope) return
-  try {
-    localStorage.setItem(KEY, JSON.stringify(put(read(), scope, text)))
-  } catch {
-    /* quota or private mode — history is a convenience, never a requirement */
+  let all: Histories | null = put(read(), scope, text, pastes)
+  while (all) {
+    try {
+      localStorage.setItem(KEY, JSON.stringify(all))
+      return
+    } catch {
+      /* quota or private mode — history is a convenience, never a requirement */
+      all = shed(all)
+    }
   }
 }
